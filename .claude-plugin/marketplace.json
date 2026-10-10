@@ -1,0 +1,11 @@
+{
+  "name": "wesl-playground",
+  "owner": { "name": "Vladimir Stepanenko" },
+  "plugins": [
+    {
+      "name": "wesl-playground",
+      "source": "./plugin",
+      "description": "Write, compile and preview WESL shaders in a 3D browser playground."
+    }
+  ]
+}

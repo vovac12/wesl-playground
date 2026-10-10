@@ -1,0 +1,156 @@
+[
+  {
+    "name": "shader_guide",
+    "description": "Returns the playground guide: manifest format, WESL rules, available bindings, fragment/vertex templates. Read it before writing shaders.",
+    "inputSchema": { "type": "object", "properties": {} }
+  },
+  {
+    "name": "list_projects",
+    "description": "List all groups and projects.",
+    "inputSchema": { "type": "object", "properties": {} }
+  },
+  {
+    "name": "get_project",
+    "description": "Get a project's manifest, file list and text file sources.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Project id: `name` or `group/name`, lowercase snake_case" },
+        "include_sources": { "type": "boolean", "default": true }
+      },
+      "required": ["id"]
+    }
+  },
+  {
+    "name": "create_project",
+    "description": "Create a project (manifest + shader/text files), then compile it off-screen and return errors. Works independently of what the viewer shows. Put variants in one group with ids like `portals/v1_swirl`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Project id: `name` or `group/name`, lowercase snake_case" },
+        "manifest": { "type": "object", "description": "Full project.json content (see shader_guide): name, description, camera, background, grid, objects[]" },
+        "files": {
+          "type": "object",
+          "description": "Map of relative path -> file text (e.g. {\"portal.wesl\": \"...\"}).",
+          "additionalProperties": { "type": ["string", "null"] }
+        },
+        "group_name": { "type": "string", "description": "Optional display name for the group (when id has a group)" },
+        "overwrite": { "type": "boolean", "default": false, "description": "Replace an existing project entirely" },
+        "compile": { "type": "boolean", "default": true },
+        "preview": { "type": "boolean", "default": false, "description": "Also return a rendered preview image" }
+      },
+      "required": ["id", "manifest"]
+    }
+  },
+  {
+    "name": "update_project",
+    "description": "Write/delete files and/or replace the manifest of an existing project, then compile it and return errors.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Project id: `name` or `group/name`, lowercase snake_case" },
+        "manifest": { "type": "object", "description": "Full project.json content (replaces the current one)" },
+        "files": {
+          "type": "object",
+          "description": "Map of relative path -> file text; null deletes the file.",
+          "additionalProperties": { "type": ["string", "null"] }
+        },
+        "compile": { "type": "boolean", "default": true },
+        "preview": { "type": "boolean", "default": false }
+      },
+      "required": ["id"]
+    }
+  },
+  {
+    "name": "delete_project",
+    "description": "Delete a project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"]
+    }
+  },
+  {
+    "name": "set_group",
+    "description": "Create or update a group's display name, description and spacing (distance between projects when the whole group is shown).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "group": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "spacing": { "type": "number" }
+      },
+      "required": ["group"]
+    }
+  },
+  {
+    "name": "add_texture",
+    "description": "Add a texture to a project: procedural PNG, base64 image data, or a copy of a local image file.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string" },
+        "path": { "type": "string", "description": "e.g. textures/noise.png" },
+        "procedural": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["noise", "fbm", "voronoi", "checker", "gradient", "radial", "stripes"] },
+            "size": { "type": "integer", "default": 256 },
+            "scale": { "type": "number", "default": 8 },
+            "seed": { "type": "integer", "default": 0 },
+            "color_a": { "type": "array", "items": { "type": "number" }, "description": "linear RGBA at t=0" },
+            "color_b": { "type": "array", "items": { "type": "number" }, "description": "linear RGBA at t=1" }
+          }
+        },
+        "base64": { "type": "string" },
+        "source_path": { "type": "string", "description": "Absolute path of a local file to copy" }
+      },
+      "required": ["project", "path"]
+    }
+  },
+  {
+    "name": "import_file",
+    "description": "Copy a binary file (e.g. .glb mesh, image) into a project from a local path or base64.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string" },
+        "path": { "type": "string" },
+        "base64": { "type": "string" },
+        "source_path": { "type": "string", "description": "Absolute path of a local file to copy" }
+      },
+      "required": ["project", "path"]
+    }
+  },
+  {
+    "name": "compile_project",
+    "description": "Compile a project off-screen (does not change the viewer) and return shader/asset errors plus an optional preview image.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "preview": { "type": "boolean", "default": true }
+      },
+      "required": ["id"]
+    }
+  },
+  {
+    "name": "open_in_viewer",
+    "description": "Show a project, or a whole group side by side, in the user's viewer. Changes what the user sees; use when asked.",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "project": { "type": "string" }, "group": { "type": "string" } }
+    }
+  },
+  {
+    "name": "screenshot",
+    "description": "Capture the viewer as the user currently sees it.",
+    "inputSchema": { "type": "object", "properties": {} }
+  },
+  {
+    "name": "viewer_state",
+    "description": "What the viewer is showing, its errors, and recent warnings/errors from the log.",
+    "inputSchema": { "type": "object", "properties": {} }
+  }
+]

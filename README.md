@@ -1,8 +1,8 @@
 # Shader Playground
 
-A 3D playground for [WESL](https://wesl-lang.dev) shaders, built on Bevy 0.20, with a built-in
-[MCP](https://modelcontextprotocol.io) server. Ask an AI agent like Claude Code to write shaders,
-get compile errors back automatically, then fly around the results.
+A 3D playground for [WESL](https://wesl-lang.dev) shaders, built on Bevy 0.20, driven by
+[MCP](https://modelcontextprotocol.io). Ask Claude Code to write shaders, get compile errors back
+automatically, then fly around the results, in the browser or as a native app.
 
 > *"Generate 5 variants of portal shaders"* → five projects in a `Portals` group, compiled
 > and listed in the viewer. Open one, or show the whole group side by side.
@@ -11,7 +11,9 @@ get compile errors back automatically, then fly around the results.
 
 - **Fly-through viewer**: free camera, a project dropdown, and a group view that lays out
   every project in the group with floating labels.
-- **MCP server built into the app**: agents create, edit, compile and delete projects,
+- **Runs in the browser or natively**: WebGPU/WebGL2 build on GitHub Pages with projects in
+  browser storage, or a native app working on a folder.
+- **Claude Code plugin and built-in MCP server**: agents create, edit, compile and delete projects,
   whether or not those projects are open in the viewer.
 - **Real compile feedback**: projects compile in an off-screen sandbox, which reports WESL and
   naga errors, missing imports and asset failures, with an optional preview image.
@@ -19,7 +21,27 @@ get compile errors back automatically, then fly around the results.
 - **Batteries included**: material bindings, noise helpers, procedural textures, primitive,
   glTF and custom meshes.
 
-## Quick start
+## Quick start: browser
+
+1. Install the Claude Code plugin (needs Node.js 18+):
+
+   ```
+   /plugin install wesl-playground --marketplace vovac12/wesl-playground
+   ```
+
+   On older Claude Code versions: `/plugin marketplace add vovac12/wesl-playground`, then
+   `/plugin install wesl-playground@wesl-playground`.
+
+2. Open the viewer: **https://vovac12.github.io/wesl-playground/**
+3. Run `claude` and ask for some shaders.
+
+The plugin runs a small local bridge (`plugin/server/bridge.mjs`) that Claude talks to over
+stdio. The page connects to it at `ws://127.0.0.1:7880`. Projects are stored in the browser
+(IndexedDB). Use `?bridge=ws://host:port` on the page URL and `WESL_PLAYGROUND_PORT` for the
+bridge to change the port. Chrome may ask to allow the page to access devices on your local
+network the first time.
+
+## Quick start: native
 
 Requires Rust 1.97+.
 
@@ -27,8 +49,7 @@ Requires Rust 1.97+.
 cargo run --release
 ```
 
-Then connect Claude Code, either by running `claude` in this repo (it ships a `.mcp.json`) or
-by registering the server once:
+Then run `claude` in this repo (it ships a `.mcp.json`) or register the server once:
 
 ```sh
 claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp
@@ -39,7 +60,17 @@ claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp
 | `BASE_FOLDER` | `./projects`     | Where shader projects live  |
 | `MCP_ADDR`    | `127.0.0.1:7878` | MCP server address (`/mcp`) |
 
-On first launch the app creates an `examples` group in an empty `BASE_FOLDER`.
+On first launch both versions create an `examples` group.
+
+### Building the web version
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129   # must match Cargo.lock
+./web/build.sh                                     # output in dist/
+```
+
+Pushing to `main` deploys `dist/` to GitHub Pages (`.github/workflows/pages.yml`).
 
 ## Controls
 
@@ -93,8 +124,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ```
 
-See [`src/guide.md`](src/guide.md) for the full manifest format, bindings, mesh shapes and a
-vertex shader template. The MCP server also sends this guide to agents.
+See [`plugin/server/guide.md`](plugin/server/guide.md) for the full manifest format, bindings,
+mesh shapes and a vertex shader template. The MCP server also sends this guide to agents.
 
 ## MCP tools
 

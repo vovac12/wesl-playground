@@ -1,14 +1,25 @@
-//! Minimal MCP server (Streamable HTTP transport, JSON responses only) running inside the app.
+//! MCP server core: JSON-RPC handling and tools, independent of the transport.
 //!
-//! Register with Claude Code:
-//! `claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp`
+//! - Native: Streamable HTTP server (`http.rs`), e.g.
+//!   `claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp`
+//! - Browser: WebSocket client connecting to the local bridge from the Claude Code plugin
+//!   (`ws.rs`, `plugin/server/bridge.mjs`).
 
-use std::{collections::BTreeMap, sync::Arc, thread, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
+mod http;
+#[cfg(target_arch = "wasm32")]
+mod ws;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use http::spawn;
+#[cfg(target_arch = "wasm32")]
+pub use ws::{BridgeStatus, spawn};
+
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
+
+use async_channel::{Receiver, Sender, bounded};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use crossbeam_channel::{Sender, bounded};
 use serde_json::{Value, json};
-use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::{
     bridge::{AppRequest, CompileReport, ViewTarget},
@@ -18,7 +29,8 @@ use crate::{
     textures::{Procedural, generate_png},
 };
 
-pub const GUIDE: &str = include_str!("guide.md");
+pub const GUIDE: &str = include_str!("../../plugin/server/guide.md");
+const TOOLS: &str = include_str!("../../plugin/server/tools.json");
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const COMPILE_WAIT: Duration = Duration::from_secs(60);
 const APP_WAIT: Duration = Duration::from_secs(10);
@@ -29,76 +41,44 @@ pub struct McpServer {
     app: Sender<AppRequest>,
 }
 
-pub fn spawn(addr: String, store: Arc<Store>, app: Sender<AppRequest>) {
-    let server = match Server::http(&addr) {
-        Ok(server) => server,
-        Err(e) => {
-            bevy::log::error!("MCP server failed to bind {addr}: {e}");
-            return;
-        }
+/// Waits for the app's reply, giving up after `timeout`.
+async fn wait<T>(rx: Receiver<T>, timeout: Duration) -> Result<T, String> {
+    let reply = async {
+        rx.recv()
+            .await
+            .map_err(|_| "viewer is shutting down".to_string())
     };
-    bevy::log::info!("MCP server listening on http://{addr}/mcp");
-    let mcp = McpServer { store, app };
-    thread::Builder::new()
-        .name("mcp-http".into())
-        .spawn(move || {
-            for request in server.incoming_requests() {
-                let mcp = mcp.clone();
-                // Compiles can take a while; don't block other requests.
-                thread::spawn(move || mcp.handle_http(request));
-            }
-        })
-        .expect("spawn MCP thread");
-}
-
-fn json_header() -> Header {
-    Header::from_bytes("Content-Type", "application/json").unwrap()
+    let timer = async {
+        futures_timer::Delay::new(timeout).await;
+        Err(format!(
+            "viewer did not respond within {}s (is it busy, minimized or in a background tab?)",
+            timeout.as_secs()
+        ))
+    };
+    futures_lite::future::or(reply, timer).await
 }
 
 impl McpServer {
-    fn handle_http(&self, mut request: Request) {
-        if request.url().split('?').next() != Some("/mcp") {
-            let _ = request.respond(Response::from_string("not found").with_status_code(404));
-            return;
-        }
-        match request.method() {
-            Method::Post => {}
-            Method::Delete => {
-                let _ = request.respond(Response::empty(200));
-                return;
-            }
-            // No server-initiated streams.
-            _ => {
-                let _ = request.respond(Response::empty(405));
-                return;
-            }
-        }
-        let mut body = String::new();
-        if request.as_reader().read_to_string(&mut body).is_err() {
-            let _ = request.respond(Response::empty(400));
-            return;
-        }
-        let response = match serde_json::from_str::<Value>(&body) {
-            Err(e) => Some(rpc_error(Value::Null, -32700, &format!("parse error: {e}"))),
-            Ok(Value::Array(batch)) => {
-                let out: Vec<Value> = batch
-                    .into_iter()
-                    .filter_map(|m| self.handle_message(m))
-                    .collect();
-                (!out.is_empty()).then_some(Value::Array(out))
-            }
-            Ok(message) => self.handle_message(message),
-        };
-        let _ = match response {
-            Some(value) => {
-                request.respond(Response::from_string(value.to_string()).with_header(json_header()))
-            }
-            // Notifications and responses get 202 with no body.
-            None => request.respond(Response::empty(202)),
-        };
+    pub fn new(store: Arc<Store>, app: Sender<AppRequest>) -> Self {
+        Self { store, app }
     }
 
-    fn handle_message(&self, message: Value) -> Option<Value> {
+    /// Handles a JSON-RPC message or batch; `None` for notifications.
+    pub async fn handle_json(&self, body: &str) -> Option<Value> {
+        match serde_json::from_str::<Value>(body) {
+            Err(e) => Some(rpc_error(Value::Null, -32700, &format!("parse error: {e}"))),
+            Ok(Value::Array(batch)) => {
+                let mut out = Vec::new();
+                for message in batch {
+                    out.extend(self.handle_message(message).await);
+                }
+                (!out.is_empty()).then_some(Value::Array(out))
+            }
+            Ok(message) => self.handle_message(message).await,
+        }
+    }
+
+    async fn handle_message(&self, message: Value) -> Option<Value> {
         let id = message.get("id").cloned();
         let method = message
             .get("method")
@@ -127,7 +107,7 @@ impl McpServer {
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                Ok(match self.call_tool(name, &args) {
+                Ok(match self.call_tool(name, &args).await {
                     Ok(content) => json!({ "content": content, "isError": false }),
                     Err(e) => json!({ "content": [text(&e)], "isError": true }),
                 })
@@ -140,13 +120,13 @@ impl McpServer {
         })
     }
 
-    fn call_tool(&self, name: &str, args: &Value) -> Result<Vec<Value>, String> {
+    async fn call_tool(&self, name: &str, args: &Value) -> Result<Vec<Value>, String> {
         match name {
             "shader_guide" => Ok(vec![text(GUIDE)]),
             "list_projects" => self.list_projects(),
             "get_project" => self.get_project(args),
-            "create_project" => self.create_project(args),
-            "update_project" => self.update_project(args),
+            "create_project" => self.create_project(args).await,
+            "update_project" => self.update_project(args).await,
             "delete_project" => {
                 let id = str_arg(args, "id")?;
                 self.store.delete_project(id)?;
@@ -159,23 +139,19 @@ impl McpServer {
             "compile_project" => {
                 let id = str_arg(args, "id")?;
                 self.require_project(id)?;
-                self.compile(id, bool_arg(args, "preview", true))
+                self.compile(id, bool_arg(args, "preview", true)).await
             }
-            "open_in_viewer" => self.open_in_viewer(args),
+            "open_in_viewer" => self.open_in_viewer(args).await,
             "screenshot" => {
                 let (tx, rx) = bounded(1);
                 self.send(AppRequest::Screenshot { reply: tx })?;
-                let png = rx
-                    .recv_timeout(APP_WAIT)
-                    .map_err(|_| "viewer did not respond")??;
+                let png = wait(rx, APP_WAIT).await??;
                 Ok(vec![image(&png)])
             }
             "viewer_state" => {
                 let (tx, rx) = bounded(1);
                 self.send(AppRequest::State { reply: tx })?;
-                let state = rx
-                    .recv_timeout(APP_WAIT)
-                    .map_err(|_| "viewer did not respond")?;
+                let state = wait(rx, APP_WAIT).await?;
                 Ok(vec![text(&serde_json::to_string_pretty(&state).unwrap())])
             }
             other => Err(format!("unknown tool `{other}`")),
@@ -184,14 +160,14 @@ impl McpServer {
 
     fn send(&self, request: AppRequest) -> Result<(), String> {
         self.app
-            .send(request)
+            .try_send(request)
             .map_err(|_| "viewer is shutting down".to_string())
     }
 
     fn notify(&self, id: &str) {
         let _ = self
             .app
-            .send(AppRequest::ProjectChanged { id: id.to_string() });
+            .try_send(AppRequest::ProjectChanged { id: id.to_string() });
     }
 
     fn require_project(&self, id: &str) -> Result<(), String> {
@@ -203,16 +179,14 @@ impl McpServer {
         }
     }
 
-    fn compile(&self, id: &str, preview: bool) -> Result<Vec<Value>, String> {
+    async fn compile(&self, id: &str, preview: bool) -> Result<Vec<Value>, String> {
         let (tx, rx) = bounded(1);
         self.send(AppRequest::Compile {
             id: id.to_string(),
             preview,
             reply: tx,
         })?;
-        let report: CompileReport = rx
-            .recv_timeout(COMPILE_WAIT)
-            .map_err(|_| "viewer did not finish compiling in time (is it busy or minimized?)")?;
+        let report: CompileReport = wait(rx, COMPILE_WAIT).await?;
         let mut out = vec![text(&serde_json::to_string_pretty(&report).unwrap())];
         if let Some(png) = &report.preview_png {
             out.push(image(png));
@@ -230,7 +204,7 @@ impl McpServer {
             Err(e) => json!({ "id": p.id, "manifest_error": e }),
         };
         let value = json!({
-            "base_folder": self.store.base.display().to_string(),
+            "storage": self.store.vfs.describe(),
             "groups": catalog.groups.iter().map(|g| json!({
                 "id": g.id,
                 "name": g.manifest.name,
@@ -267,7 +241,7 @@ impl McpServer {
         Ok(vec![text(&serde_json::to_string_pretty(&value).unwrap())])
     }
 
-    fn create_project(&self, args: &Value) -> Result<Vec<Value>, String> {
+    async fn create_project(&self, args: &Value) -> Result<Vec<Value>, String> {
         let id = str_arg(args, "id")?;
         self.store.check_project_location(id)?;
         let manifest = manifest_arg(args)?.ok_or("`manifest` is required")?;
@@ -298,10 +272,10 @@ impl McpServer {
         }
         self.store.write_manifest(id, &manifest)?;
         self.notify(id);
-        self.after_write(id, args)
+        self.after_write(id, args).await
     }
 
-    fn update_project(&self, args: &Value) -> Result<Vec<Value>, String> {
+    async fn update_project(&self, args: &Value) -> Result<Vec<Value>, String> {
         let id = str_arg(args, "id")?;
         self.require_project(id)?;
         for (path, content) in files_arg(args)? {
@@ -316,12 +290,12 @@ impl McpServer {
             self.store.write_manifest(id, &manifest)?;
         }
         self.notify(id);
-        self.after_write(id, args)
+        self.after_write(id, args).await
     }
 
-    fn after_write(&self, id: &str, args: &Value) -> Result<Vec<Value>, String> {
+    async fn after_write(&self, id: &str, args: &Value) -> Result<Vec<Value>, String> {
         if bool_arg(args, "compile", true) {
-            self.compile(id, bool_arg(args, "preview", false))
+            self.compile(id, bool_arg(args, "preview", false)).await
         } else {
             Ok(vec![text(&format!("saved `{id}` (not compiled)"))])
         }
@@ -385,7 +359,7 @@ impl McpServer {
         ))])
     }
 
-    fn open_in_viewer(&self, args: &Value) -> Result<Vec<Value>, String> {
+    async fn open_in_viewer(&self, args: &Value) -> Result<Vec<Value>, String> {
         let target = match (
             args.get("project").and_then(Value::as_str),
             args.get("group").and_then(Value::as_str),
@@ -396,9 +370,7 @@ impl McpServer {
         };
         let (tx, rx) = bounded(1);
         self.send(AppRequest::Open { target, reply: tx })?;
-        let msg = rx
-            .recv_timeout(APP_WAIT)
-            .map_err(|_| "viewer did not respond")??;
+        let msg = wait(rx, APP_WAIT).await??;
         Ok(vec![text(&msg)])
     }
 }
@@ -410,10 +382,24 @@ fn binary_source(args: &Value) -> Result<Vec<u8>, String> {
             .decode(b64.trim())
             .map_err(|e| format!("invalid base64: {e}"))
     } else if let Some(src) = args.get("source_path").and_then(Value::as_str) {
-        std::fs::read(src).map_err(|e| format!("{src}: {e}"))
+        read_local_file(src)
     } else {
         Err("provide one of `procedural`, `base64` or `source_path`".into())
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_local_file(path: &str) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The bridge replaces `source_path` with `base64` before forwarding, since the page
+/// cannot read local files.
+#[cfg(target_arch = "wasm32")]
+fn read_local_file(path: &str) -> Result<Vec<u8>, String> {
+    Err(format!(
+        "{path}: the browser viewer cannot read local files; pass `base64` instead"
+    ))
 }
 
 fn manifest_arg(args: &Value) -> Result<Option<Manifest>, String> {
@@ -473,152 +459,5 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 }
 
 fn tool_list() -> Value {
-    let id = json!({ "type": "string", "description": "Project id: `name` or `group/name`, lowercase snake_case" });
-    let manifest = json!({
-        "type": "object",
-        "description": "Full project.json content (see shader_guide): name, description, camera, background, grid, objects[]",
-    });
-    let files = json!({
-        "type": "object",
-        "description": "Map of relative path -> file text (e.g. {\"portal.wesl\": \"...\"}). In update_project, null deletes the file.",
-        "additionalProperties": { "type": ["string", "null"] },
-    });
-    json!([
-        {
-            "name": "shader_guide",
-            "description": "Returns the playground guide: manifest format, WESL rules, available bindings, fragment/vertex templates. Read it before writing shaders.",
-            "inputSchema": { "type": "object", "properties": {} },
-        },
-        {
-            "name": "list_projects",
-            "description": "List all groups and projects in the base folder.",
-            "inputSchema": { "type": "object", "properties": {} },
-        },
-        {
-            "name": "get_project",
-            "description": "Get a project's manifest, file list and text file sources.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "id": id, "include_sources": { "type": "boolean", "default": true } },
-                "required": ["id"],
-            },
-        },
-        {
-            "name": "create_project",
-            "description": "Create a project (manifest + shader/text files), then compile it off-screen and return errors. Works independently of what the viewer shows. Put variants in one group with ids like `portals/v1_swirl`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": id,
-                    "manifest": manifest,
-                    "files": files,
-                    "group_name": { "type": "string", "description": "Optional display name for the group (when id has a group)" },
-                    "overwrite": { "type": "boolean", "default": false, "description": "Replace an existing project entirely" },
-                    "compile": { "type": "boolean", "default": true },
-                    "preview": { "type": "boolean", "default": false, "description": "Also return a rendered preview image" },
-                },
-                "required": ["id", "manifest"],
-            },
-        },
-        {
-            "name": "update_project",
-            "description": "Write/delete files and/or replace the manifest of an existing project, then compile it and return errors.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": id,
-                    "manifest": manifest,
-                    "files": files,
-                    "compile": { "type": "boolean", "default": true },
-                    "preview": { "type": "boolean", "default": false },
-                },
-                "required": ["id"],
-            },
-        },
-        {
-            "name": "delete_project",
-            "description": "Delete a project folder.",
-            "inputSchema": { "type": "object", "properties": { "id": id }, "required": ["id"] },
-        },
-        {
-            "name": "set_group",
-            "description": "Create or update a group's display name, description and spacing (distance between projects when the whole group is shown).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "group": { "type": "string" },
-                    "name": { "type": "string" },
-                    "description": { "type": "string" },
-                    "spacing": { "type": "number" },
-                },
-                "required": ["group"],
-            },
-        },
-        {
-            "name": "add_texture",
-            "description": "Add a texture to a project: procedural PNG, base64 image data, or a copy of a local image file.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "project": id,
-                    "path": { "type": "string", "description": "e.g. textures/noise.png" },
-                    "procedural": {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "enum": ["noise", "fbm", "voronoi", "checker", "gradient", "radial", "stripes"] },
-                            "size": { "type": "integer", "default": 256 },
-                            "scale": { "type": "number", "default": 8 },
-                            "seed": { "type": "integer", "default": 0 },
-                            "color_a": { "type": "array", "items": { "type": "number" }, "description": "linear RGBA at t=0" },
-                            "color_b": { "type": "array", "items": { "type": "number" }, "description": "linear RGBA at t=1" },
-                        },
-                    },
-                    "base64": { "type": "string" },
-                    "source_path": { "type": "string", "description": "Absolute path of a local file to copy" },
-                },
-                "required": ["project", "path"],
-            },
-        },
-        {
-            "name": "import_file",
-            "description": "Copy a binary file (e.g. .glb mesh, image) into a project from a local path or base64.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "project": id,
-                    "path": { "type": "string" },
-                    "base64": { "type": "string" },
-                    "source_path": { "type": "string" },
-                },
-                "required": ["project", "path"],
-            },
-        },
-        {
-            "name": "compile_project",
-            "description": "Compile a project off-screen (does not change the viewer) and return shader/asset errors plus an optional preview image.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "id": id, "preview": { "type": "boolean", "default": true } },
-                "required": ["id"],
-            },
-        },
-        {
-            "name": "open_in_viewer",
-            "description": "Show a project, or a whole group side by side, in the user's viewer window. Changes what the user sees; use when asked.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "project": { "type": "string" }, "group": { "type": "string" } },
-            },
-        },
-        {
-            "name": "screenshot",
-            "description": "Capture the viewer window as the user currently sees it.",
-            "inputSchema": { "type": "object", "properties": {} },
-        },
-        {
-            "name": "viewer_state",
-            "description": "What the viewer is showing, its errors, and recent warnings/errors from the log.",
-            "inputSchema": { "type": "object", "properties": {} },
-        },
-    ])
+    serde_json::from_str(TOOLS).expect("plugin/server/tools.json is valid JSON")
 }

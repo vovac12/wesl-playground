@@ -1,7 +1,7 @@
 # Shader playground (Bevy 0.20, WESL)
 
-A running 3D viewer. Shader *projects* live in folders under the viewer's BASE_FOLDER and show
-up in the viewer's dropdown. The user can fly around (right mouse = look, WASD/QE = move,
+A running 3D viewer (native app or browser tab). Shader *projects* live in the viewer's project
+storage and show up in its dropdown. The user can fly around (right mouse = look, WASD/QE = move,
 Shift = fast). Projects can be grouped; a whole group can be shown side by side.
 
 ## Workflow

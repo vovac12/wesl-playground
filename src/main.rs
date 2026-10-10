@@ -1,8 +1,11 @@
 //! Shader playground: a Bevy viewer for WESL shader projects, driven by an embedded MCP server.
 //!
-//! Environment:
+//! Native environment:
 //! - `BASE_FOLDER`: folder holding shader projects (default `./projects`)
 //! - `MCP_ADDR`: MCP listen address (default `127.0.0.1:7878`)
+//!
+//! In the browser, projects live in IndexedDB and MCP requests arrive from the Claude Code
+//! plugin's bridge (`?bridge=ws://127.0.0.1:7880` overrides its address).
 
 #![allow(
     clippy::type_complexity,
@@ -23,9 +26,13 @@ mod project;
 mod scene;
 mod textures;
 mod ui;
+mod vfs;
+#[cfg(target_arch = "wasm32")]
+mod web_assets;
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
+use async_channel::Receiver;
 use bevy::{
     camera_controller::free_camera::FreeCameraPlugin,
     image::{ImageAddressMode, ImageSamplerDescriptor},
@@ -35,35 +42,106 @@ use bevy::{
 };
 
 use crate::{
+    bridge::AppRequest,
     material::ToyMaterialPlugin,
     pipeline_status::PipelineStatusPlugin,
     playground::PlaygroundPlugin,
     project::{GroupManifest, Manifest, MeshSpec, ObjectSpec, Store},
-    ui::UiPlugin,
+    ui::{ConnectionLabel, UiPlugin},
+    vfs::Vfs,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    use std::path::PathBuf;
+
     let base = std::env::var("BASE_FOLDER").unwrap_or_else(|_| "projects".into());
     let base = std::path::absolute(PathBuf::from(base)).expect("resolve BASE_FOLDER");
     std::fs::create_dir_all(&base).expect("create BASE_FOLDER");
     let addr = std::env::var("MCP_ADDR").unwrap_or_else(|_| "127.0.0.1:7878".into());
     let mcp_url = format!("http://{addr}/mcp");
 
-    let store = Arc::new(Store::new(base.clone()));
+    let store = Arc::new(Store::new(Vfs::new(base.clone())));
     seed_examples(&store);
     write_mcp_config(&base, &mcp_url);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-
+    let (tx, rx) = async_channel::unbounded();
+    let window = Window {
+        title: format!("Shader Playground - {}", base.display()),
+        ..default()
+    };
+    let asset_plugin = AssetPlugin {
+        file_path: base.to_string_lossy().into_owned(),
+        // Hot-reload shaders edited by hand as well as through MCP.
+        watch_for_changes_override: Some(true),
+        ..default()
+    };
     let mut app = App::new();
+    build_app(&mut app, store.clone(), rx, window, asset_plugin);
+    app.insert_resource(ConnectionLabel(format!("MCP: {mcp_url}")));
+    info!("connect Claude Code with: claude mcp add --transport http shadertoy {mcp_url}");
+
+    mcp::spawn(addr, store, tx);
+    app.run();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use bevy::asset::AssetMetaCheck;
+
+    let store = Arc::new(Store::new(Vfs::new()));
+    seed_examples(&store);
+
+    let (tx, rx) = async_channel::unbounded();
+    let window = Window {
+        title: "Shader Playground".into(),
+        canvas: Some("#bevy".into()),
+        fit_canvas_to_parent: true,
+        // Keeps Tab, right click etc. inside the app.
+        prevent_default_event_handling: true,
+        ..default()
+    };
+    let asset_plugin = AssetPlugin {
+        meta_check: AssetMetaCheck::Never,
+        ..default()
+    };
+    let mut app = App::new();
+    // The project storage replaces the default (HTTP) asset source.
+    app.add_plugins(web_assets::VfsAssetSourcePlugin);
+    build_app(&mut app, store.clone(), rx, window, asset_plugin);
+
+    let status = mcp::spawn(store, tx);
+    app.insert_resource(ConnectionLabel(String::new()))
+        .insert_resource(status)
+        .add_systems(Update, update_bridge_label);
+    app.run();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn update_bridge_label(status: Res<mcp::BridgeStatus>, mut label: ResMut<ConnectionLabel>) {
+    let text = if status.connected() {
+        format!("Claude Code bridge: connected ({})", status.url)
+    } else {
+        format!(
+            "Claude Code bridge: waiting for {} (install the wesl-playground plugin and run `claude`)",
+            status.url
+        )
+    };
+    if label.0 != text {
+        label.0 = text;
+    }
+}
+
+fn build_app(
+    app: &mut App,
+    store: Arc<Store>,
+    requests: Receiver<AppRequest>,
+    window: Window,
+    asset_plugin: AssetPlugin,
+) {
     app.add_plugins(
         DefaultPlugins
-            .set(AssetPlugin {
-                file_path: base.to_string_lossy().into_owned(),
-                // Hot-reload shaders edited by hand as well as through MCP.
-                watch_for_changes_override: Some(true),
-                ..default()
-            })
+            .set(asset_plugin)
             // Repeat addressing so shaders can tile and scroll textures freely.
             .set(
                 ImagePlugin::default_linear().with_default_sampler(ImageSamplerDescriptor {
@@ -78,10 +156,7 @@ fn main() {
                 ..default()
             })
             .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: format!("Shader Playground - {}", base.display()),
-                    ..default()
-                }),
+                primary_window: Some(window),
                 ..default()
             }),
     )
@@ -89,11 +164,8 @@ fn main() {
         FreeCameraPlugin,
         ToyMaterialPlugin,
         PipelineStatusPlugin,
-        PlaygroundPlugin {
-            store: store.clone(),
-            requests: rx,
-        },
-        UiPlugin { mcp_url },
+        PlaygroundPlugin { store, requests },
+        UiPlugin,
     ))
     // A broken user shader must not take the whole app down: wgpu validation errors are logged
     // (and reported over MCP) instead of quitting.
@@ -106,12 +178,10 @@ fn main() {
             RenderErrorPolicy::StopRendering
         }
     }));
-
-    mcp::spawn(addr, store, tx);
-    app.run();
 }
 
 /// Lets `claude` started inside BASE_FOLDER pick up the server automatically.
+#[cfg(not(target_arch = "wasm32"))]
 fn write_mcp_config(base: &std::path::Path, url: &str) {
     let path = base.join(".mcp.json");
     if path.exists() {

@@ -4,9 +4,11 @@ use std::{
     collections::VecDeque,
     io::Cursor,
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
+    time::Duration,
 };
 
+use async_channel::{Receiver, Sender};
+use bevy::platform::time::Instant;
 use bevy::{
     asset::LoadState,
     camera::{RenderTarget, visibility::RenderLayers},
@@ -17,7 +19,6 @@ use bevy::{
         view::screenshot::{Screenshot, ScreenshotCaptured},
     },
 };
-use crossbeam_channel::{Receiver, Sender};
 use serde_json::json;
 
 use crate::{
@@ -96,8 +97,8 @@ pub struct CurrentView {
     pub errors: Vec<String>,
     /// Incremented every time the view is (re)spawned.
     pub generation: u64,
-    manifest_mtimes: Vec<(String, Option<SystemTime>)>,
-    last_mtime_check: Option<Instant>,
+    manifest_revisions: Vec<(String, Option<u128>)>,
+    last_revision_check: Option<Instant>,
 }
 
 pub struct PendingView {
@@ -238,25 +239,19 @@ fn refresh_catalog(mut catalog: ResMut<CatalogRes>, store: Res<StoreRes>) {
 /// Picks up manual edits to project.json of projects in the main view.
 fn watch_view_manifests(mut view: ResMut<CurrentView>, store: Res<StoreRes>) {
     if view
-        .last_mtime_check
+        .last_revision_check
         .is_some_and(|t| t.elapsed() < Duration::from_millis(700))
     {
         return;
     }
-    view.bypass_change_detection().last_mtime_check = Some(Instant::now());
+    view.bypass_change_detection().last_revision_check = Some(Instant::now());
     let changed = view
-        .manifest_mtimes
+        .manifest_revisions
         .iter()
-        .any(|(id, mtime)| manifest_mtime(&store.0, id) != *mtime);
+        .any(|(id, revision)| store.0.manifest_revision(id) != *revision);
     if changed && let Some(target) = view.target.clone() {
         view.reload(target);
     }
-}
-
-fn manifest_mtime(store: &Store, id: &str) -> Option<SystemTime> {
-    std::fs::metadata(store.project_dir(id).join(crate::project::MANIFEST_FILE))
-        .and_then(|m| m.modified())
-        .ok()
 }
 
 fn apply_view(
@@ -278,7 +273,7 @@ fn apply_view(
         commands.entity(project.root).despawn();
     }
     view.errors.clear();
-    view.manifest_mtimes.clear();
+    view.manifest_revisions.clear();
 
     // (id, origin) of every project to show.
     let mut layout: Vec<(String, Vec3)> = Vec::new();
@@ -318,8 +313,8 @@ fn apply_view(
     let mut grid = true;
     let mut camera_spec = None;
     for (id, origin) in &layout {
-        view.manifest_mtimes
-            .push((id.clone(), manifest_mtime(&store.0, id)));
+        view.manifest_revisions
+            .push((id.clone(), store.0.manifest_revision(id)));
         let manifest = match store.0.read_manifest(id) {
             Ok(m) => m,
             Err(e) => {
@@ -435,17 +430,17 @@ fn handle_requests(
                 if result.is_ok() {
                     view.open(target);
                 }
-                let _ = reply.send(result);
+                let _ = reply.try_send(result);
             }
             AppRequest::Screenshot { reply } => {
                 commands.spawn(Screenshot::primary_window()).observe(
                     move |captured: On<ScreenshotCaptured>| {
-                        let _ = reply.send(encode_png(&captured.image));
+                        let _ = reply.try_send(encode_png(&captured.image));
                     },
                 );
             }
             AppRequest::State { reply } => {
-                let _ = reply.send(state_json(&view));
+                let _ = reply.try_send(state_json(&view));
             }
             AppRequest::ProjectChanged { id } => {
                 catalog.dirty = true;
@@ -633,7 +628,7 @@ fn finish(
     if let Ok((mut camera, _)) = cameras.get_mut(sandbox.camera) {
         camera.is_active = false;
     }
-    let _ = job.reply.send(report);
+    let _ = job.reply.try_send(report);
 }
 
 /// Loaded asset source of a shader matches the file on disk (i.e. reloads have landed).
@@ -737,8 +732,7 @@ fn diagnose_imports(handle: &Handle<Shader>, store: &Store, shaders: &Assets<Sha
     };
     let exists = |path: &str| {
         let rel = path.trim_start_matches('/');
-        store.base.join(format!("{rel}.wesl")).exists()
-            || store.base.join(format!("{rel}.wgsl")).exists()
+        store.file_exists(&format!("{rel}.wesl")) || store.file_exists(&format!("{rel}.wgsl"))
     };
     let mut missing = Vec::new();
     let mut packages = Vec::new();

@@ -23,14 +23,12 @@ const TEXT: Color = Color::srgb(0.9, 0.9, 0.92);
 const TEXT_DIM: Color = Color::srgb(0.6, 0.62, 0.68);
 const ERROR: Color = Color::srgb(1.0, 0.45, 0.4);
 
-pub struct UiPlugin {
-    pub mcp_url: String,
-}
+/// The UI shows `ConnectionLabel`, which the platform setup inserts and keeps up to date.
+pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(McpUrl(self.mcp_url.clone()))
-            .init_resource::<MenuState>()
+        app.init_resource::<MenuState>()
             .add_systems(Startup, setup_ui)
             .add_systems(
                 Update,
@@ -49,7 +47,7 @@ impl Plugin for UiPlugin {
 }
 
 #[derive(Resource)]
-struct McpUrl(String);
+pub struct ConnectionLabel(pub String);
 
 #[derive(Resource, Default)]
 struct MenuState {
@@ -94,7 +92,7 @@ fn font(size: f32) -> TextFont {
     }
 }
 
-fn setup_ui(mut commands: Commands, cameras: Query<Entity, With<MainCamera>>, url: Res<McpUrl>) {
+fn setup_ui(mut commands: Commands, cameras: Query<Entity, With<MainCamera>>) {
     if let Ok(camera) = cameras.single() {
         commands.entity(camera).insert(IsDefaultUiCamera);
     }
@@ -201,10 +199,6 @@ fn setup_ui(mut commands: Commands, cameras: Query<Entity, With<MainCamera>>, ur
             ..default()
         },
     ));
-    info!(
-        "connect Claude Code with: claude mcp add --transport http shadertoy {}",
-        url.0
-    );
 }
 
 fn catalog_fingerprint(catalog: &Catalog) -> String {
@@ -418,7 +412,7 @@ fn update_item_colors(
 
 fn update_status(
     view: Res<CurrentView>,
-    url: Res<McpUrl>,
+    connection: Res<ConnectionLabel>,
     camera: Query<&Transform, With<MainCamera>>,
     mut status: Query<&mut Text, (With<StatusText>, Without<ErrorText>)>,
     mut errors: Query<&mut Text, (With<ErrorText>, Without<StatusText>)>,
@@ -426,8 +420,8 @@ fn update_status(
     if let (Ok(mut status), Ok(cam)) = (status.single_mut(), camera.single()) {
         let p = cam.translation;
         let line = format!(
-            "Right mouse: look | WASD/QE: move | Shift: fast | Wheel: speed | R: reload | Tab: projects\nMCP: {}   camera ({:.1}, {:.1}, {:.1})",
-            url.0, p.x, p.y, p.z
+            "Right mouse: look | WASD/QE: move | Shift: fast | Wheel: speed | R: reload | Tab: projects\n{}   camera ({:.1}, {:.1}, {:.1})",
+            connection.0, p.x, p.y, p.z
         );
         if status.0 != line {
             status.0 = line;

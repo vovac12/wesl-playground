@@ -1,6 +1,6 @@
-//! Messages between the MCP server thread and the Bevy app.
+//! Messages between the MCP server and the Bevy app.
 
-use crossbeam_channel::Sender;
+use async_channel::Sender;
 use serde::Serialize;
 
 pub enum AppRequest {

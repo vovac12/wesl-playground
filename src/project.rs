@@ -20,11 +20,12 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
 };
 
 use serde::{Deserialize, Serialize};
+
+use crate::vfs::Vfs;
 
 pub const MANIFEST_FILE: &str = "project.json";
 pub const GROUP_FILE: &str = "group.json";
@@ -324,53 +325,55 @@ pub fn validate_rel_path(path: &str) -> Result<String, String> {
 }
 
 pub struct Store {
-    pub base: PathBuf,
+    pub vfs: Vfs,
+}
+
+fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir}/{name}")
+    }
 }
 
 impl Store {
-    pub fn new(base: PathBuf) -> Self {
-        Self { base }
+    pub fn new(vfs: Vfs) -> Self {
+        Self { vfs }
     }
 
-    pub fn project_dir(&self, id: &str) -> PathBuf {
-        self.base.join(id)
+    fn manifest_path(id: &str) -> String {
+        join(id, MANIFEST_FILE)
     }
 
     pub fn scan(&self) -> Catalog {
         let mut catalog = Catalog::default();
-        let Ok(entries) = fs::read_dir(&self.base) else {
-            return catalog;
-        };
-        let mut dirs: Vec<_> = entries
-            .flatten()
-            .filter(|e| e.path().is_dir())
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|n| validate_slug(n).is_ok())
-            .collect();
-        dirs.sort();
-        for name in dirs {
-            let dir = self.base.join(&name);
-            if dir.join(MANIFEST_FILE).exists() {
+        let dirs = self
+            .vfs
+            .list_dir("")
+            .into_iter()
+            .filter(|(name, is_dir)| *is_dir && validate_slug(name).is_ok());
+        for (name, _) in dirs {
+            if self.vfs.is_file(&Self::manifest_path(&name)) {
                 catalog.ungrouped.push(self.load_entry(&name, None));
                 continue;
             }
-            let manifest = fs::read_to_string(dir.join(GROUP_FILE))
+            let manifest = self
+                .vfs
+                .read(&join(&name, GROUP_FILE))
                 .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default();
-            let mut projects: Vec<_> = fs::read_dir(&dir)
+            let projects = self
+                .vfs
+                .list_dir(&name)
                 .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|e| e.path().join(MANIFEST_FILE).exists())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| validate_slug(n).is_ok())
+                .filter(|(p, is_dir)| {
+                    *is_dir
+                        && validate_slug(p).is_ok()
+                        && self.vfs.is_file(&Self::manifest_path(&join(&name, p)))
+                })
+                .map(|(p, _)| self.load_entry(&join(&name, &p), Some(name.clone())))
                 .collect();
-            projects.sort();
-            let projects = projects
-                .into_iter()
-                .map(|p| self.load_entry(&format!("{name}/{p}"), Some(name.clone())))
-                .collect::<Vec<_>>();
             catalog.groups.push(GroupEntry {
                 id: name,
                 manifest,
@@ -389,30 +392,37 @@ impl Store {
     }
 
     pub fn read_manifest(&self, id: &str) -> Result<Manifest, String> {
-        let path = self.project_dir(id).join(MANIFEST_FILE);
-        let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        serde_json::from_str(&text).map_err(|e| format!("{MANIFEST_FILE}: {e}"))
+        let bytes = self
+            .vfs
+            .read(&Self::manifest_path(id))
+            .map_err(|e| e.to_string())?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("{MANIFEST_FILE}: {e}"))
+    }
+
+    /// Changes whenever the project's manifest changes.
+    pub fn manifest_revision(&self, id: &str) -> Option<u128> {
+        self.vfs.revision(&Self::manifest_path(id))
     }
 
     pub fn write_manifest(&self, id: &str, manifest: &Manifest) -> Result<(), String> {
-        let dir = self.project_dir(id);
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let text = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
-        fs::write(dir.join(MANIFEST_FILE), text).map_err(|e| e.to_string())
+        self.vfs
+            .write(&Self::manifest_path(id), text.as_bytes())
+            .map_err(|e| e.to_string())
     }
 
     pub fn project_exists(&self, id: &str) -> bool {
-        self.project_dir(id).join(MANIFEST_FILE).exists()
+        self.vfs.is_file(&Self::manifest_path(id))
     }
 
     /// Returns an error if `id` is a group folder or would be nested inside a project.
     pub fn check_project_location(&self, id: &str) -> Result<(), String> {
         validate_project_id(id)?;
         if let Some((group, _)) = id.split_once('/') {
-            if self.base.join(group).join(MANIFEST_FILE).exists() {
+            if self.project_exists(group) {
                 return Err(format!("`{group}` is a project, not a group"));
             }
-        } else if self.base.join(id).is_dir() && !self.project_exists(id) {
+        } else if self.vfs.is_dir(id) && !self.project_exists(id) {
             return Err(format!(
                 "`{id}` is a group; use `{id}/<name>` for a project inside it"
             ));
@@ -422,22 +432,22 @@ impl Store {
 
     pub fn write_file(&self, id: &str, rel: &str, bytes: &[u8]) -> Result<String, String> {
         let rel = validate_rel_path(rel)?;
-        let path = self.project_dir(id).join(&rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.vfs
+            .write(&join(id, &rel), bytes)
+            .map_err(|e| format!("{rel}: {e}"))?;
         Ok(rel)
     }
 
     pub fn read_file(&self, id: &str, rel: &str) -> Result<Vec<u8>, String> {
         let rel = validate_rel_path(rel)?;
-        fs::read(self.project_dir(id).join(rel)).map_err(|e| e.to_string())
+        self.vfs.read(&join(id, &rel)).map_err(|e| e.to_string())
     }
 
     pub fn delete_file(&self, id: &str, rel: &str) -> Result<(), String> {
         let rel = validate_rel_path(rel)?;
-        fs::remove_file(self.project_dir(id).join(rel)).map_err(|e| e.to_string())
+        self.vfs
+            .remove_file(&join(id, &rel))
+            .map_err(|e| e.to_string())
     }
 
     pub fn delete_project(&self, id: &str) -> Result<(), String> {
@@ -445,15 +455,16 @@ impl Store {
         if !self.project_exists(id) {
             return Err(format!("project `{id}` does not exist"));
         }
-        fs::remove_dir_all(self.project_dir(id)).map_err(|e| e.to_string())?;
+        self.vfs.remove_dir_all(id).map_err(|e| e.to_string())?;
         // Remove an emptied group folder (ignoring group.json).
         if let Some((group, _)) = id.split_once('/') {
-            let dir = self.base.join(group);
-            let only_meta = fs::read_dir(&dir)
-                .map(|it| it.flatten().all(|e| e.file_name() == GROUP_FILE))
-                .unwrap_or(false);
+            let only_meta = self
+                .vfs
+                .list_dir(group)
+                .iter()
+                .all(|(name, _)| name == GROUP_FILE);
             if only_meta {
-                let _ = fs::remove_dir_all(dir);
+                let _ = self.vfs.remove_dir_all(group);
             }
         }
         Ok(())
@@ -461,43 +472,39 @@ impl Store {
 
     pub fn write_group(&self, group: &str, manifest: &GroupManifest) -> Result<(), String> {
         validate_slug(group)?;
-        let dir = self.base.join(group);
-        if dir.join(MANIFEST_FILE).exists() {
+        if self.project_exists(group) {
             return Err(format!("`{group}` is a project, not a group"));
         }
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let text = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
-        fs::write(dir.join(GROUP_FILE), text).map_err(|e| e.to_string())
+        self.vfs
+            .write(&join(group, GROUP_FILE), text.as_bytes())
+            .map_err(|e| e.to_string())
     }
 
-    /// Lists project files (relative paths with `/`), excluding the manifest.
+    /// Lists files below `id` (relative paths with `/`), excluding the project manifest.
     pub fn list_files(&self, id: &str) -> Vec<String> {
-        fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
-            let Ok(entries) = fs::read_dir(dir) else {
-                return;
-            };
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk(root, &p, out);
-                } else if let Ok(rel) = p.strip_prefix(root) {
-                    let rel = rel.to_string_lossy().replace('\\', "/");
-                    if rel != MANIFEST_FILE {
-                        out.push(rel);
-                    }
+        fn walk(vfs: &Vfs, dir: &str, prefix: &str, out: &mut Vec<String>) {
+            for (name, is_dir) in vfs.list_dir(dir) {
+                let rel = join(prefix, &name);
+                if is_dir {
+                    walk(vfs, &join(dir, &name), &rel, out);
+                } else if rel != MANIFEST_FILE {
+                    out.push(rel);
                 }
             }
         }
-        let root = self.project_dir(id);
         let mut out = Vec::new();
-        walk(&root, &root, &mut out);
+        walk(&self.vfs, id, "", &mut out);
         out.sort();
         out
     }
 
-    /// Every file referenced by the manifest that is missing on disk.
+    pub fn file_exists(&self, path: &str) -> bool {
+        self.vfs.is_file(path)
+    }
+
+    /// Every file referenced by the manifest that is missing.
     pub fn missing_files(&self, id: &str, manifest: &Manifest) -> Vec<String> {
-        let dir = self.project_dir(id);
         let mut missing = Vec::new();
         for obj in &manifest.objects {
             let mut refs: Vec<&String> = obj.textures.iter().collect();
@@ -508,7 +515,7 @@ impl Store {
                 _ => {}
             }
             for r in refs {
-                if !dir.join(r).exists() {
+                if !self.vfs.is_file(&join(id, &r.replace('\\', "/"))) {
                     missing.push(format!("object `{}`: missing file `{r}`", obj.name));
                 }
             }
@@ -516,14 +523,15 @@ impl Store {
         missing
     }
 
-    /// All `.wesl`/`.wgsl` files of a project with their on-disk sources (asset path -> source).
+    /// All `.wesl`/`.wgsl` files of a project with their sources (asset path -> source).
     pub fn shader_sources(&self, id: &str) -> BTreeMap<String, String> {
         self.list_files(id)
             .into_iter()
             .filter(|f| f.ends_with(".wesl") || f.ends_with(".wgsl"))
             .filter_map(|f| {
-                let src = fs::read_to_string(self.project_dir(id).join(&f)).ok()?;
-                Some((format!("{id}/{f}"), src))
+                let path = join(id, &f);
+                let src = String::from_utf8(self.vfs.read(&path).ok()?).ok()?;
+                Some((path, src))
             })
             .collect()
     }
