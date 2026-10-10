@@ -17,7 +17,9 @@ wasm-bindgen --target web --no-typescript --out-dir dist --out-name shadertoy \
   "target/wasm32-unknown-unknown/$out_dir/shadertoy.wasm"
 
 if command -v wasm-opt >/dev/null 2>&1; then
-  wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int \
+  # Enable the wasm features rustc targets by default.
+  wasm-opt -Os --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+    --enable-mutable-globals --enable-reference-types --enable-multivalue \
     -o dist/shadertoy_bg.wasm dist/shadertoy_bg.wasm ||
     echo "wasm-opt failed; keeping the unoptimized module"
 fi
