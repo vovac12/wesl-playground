@@ -13,12 +13,13 @@
 //   WESL_PLAYGROUND_PORT     WebSocket port for browser tabs (default 7880)
 //   WESL_PLAYGROUND_URL      viewer URL (default https://vovac12.github.io/wesl-playground/)
 //   WESL_PLAYGROUND_ORIGINS  extra allowed page origins, comma separated
+//                            (e.g. http://localhost:8080 for a local build of the viewer)
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -35,6 +36,9 @@ const CALL_TIMEOUT_MS = 90_000;
 const BOOT_WAIT_MS = 60_000; // how long tools wait for an inline viewer that is loading
 const POLL_HOLD_MS = 20_000; // long-poll duration for inline viewers
 const APP_VIEWER_TTL_MS = 45_000; // an inline viewer that stopped polling is gone
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".ktx2", ".hdr"];
+const MESH_EXTENSIONS = [".glb", ".gltf", ".bin"];
+const MAX_SOURCE_BYTES = 64 << 20;
 
 const UI_EXTENSION = "io.modelcontextprotocol/ui";
 const UI_MIME = "text/html;profile=mcp-app";
@@ -250,16 +254,19 @@ const APP_TOOLS = [
   {
     name: "viewer_connect",
     description: "Inline viewer: attach to the bridge and fetch the project files.",
+    annotations: { title: "Connect viewer", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
   },
   {
     name: "viewer_poll",
     description: "Inline viewer: wait for requests from the bridge.",
+    annotations: { title: "Poll viewer requests", readOnlyHint: true, openWorldHint: false },
     inputSchema: { type: "object", properties: { viewerId: { type: "string" } }, required: ["viewerId"] },
   },
   {
     name: "viewer_send",
     description: "Inline viewer: send responses and storage changes to the bridge.",
+    annotations: { title: "Send viewer updates", readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: { viewerId: { type: "string" }, messages: { type: "array" } },
@@ -336,9 +343,19 @@ async function callTool(params) {
     );
   }
 
-  // The viewer cannot read local files, so inline them.
+  // The viewer cannot read local files, so inline them. Only images and meshes are accepted,
+  // so the tool cannot be used to read arbitrary files (keys, documents) into a project.
   if (typeof args.source_path === "string") {
+    const ext = extname(args.source_path).toLowerCase();
+    const allowed = name === "add_texture" ? IMAGE_EXTENSIONS : [...IMAGE_EXTENSIONS, ...MESH_EXTENSIONS];
+    if (!allowed.includes(ext)) {
+      return errorResult(`${args.source_path}: only ${allowed.join(", ")} files can be copied from disk; pass \`base64\` for other content.`);
+    }
     try {
+      const size = statSync(args.source_path).size;
+      if (size > MAX_SOURCE_BYTES) {
+        return errorResult(`${args.source_path}: ${size} bytes is over the ${MAX_SOURCE_BYTES >> 20} MB limit.`);
+      }
       args.base64 = readFileSync(args.source_path).toString("base64");
       delete args.source_path;
     } catch (e) {
@@ -363,7 +380,8 @@ async function handleClaude(message) {
         capabilities: { tools: { listChanged: false }, ...(clientSupportsUi ? { resources: {} } : {}) },
         serverInfo: { name: "wesl-playground", version: VERSION },
         instructions:
-          `${GUIDE}\n\n## Viewer\n` +
+          "WESL shader playground: each project is a folder with a project.json and .wesl files. " +
+          "Call `shader_guide` once before writing shaders. " +
           (clientSupportsUi
             ? "This client shows the viewer inline: call `open_in_viewer` first (it starts the viewer), then create and compile projects. "
             : `The viewer runs in the user's browser at ${VIEWER_URL}. If a tool reports that no viewer is running, ask the user to open that page. `) +
@@ -425,8 +443,7 @@ const allowedOrigins = [
 ];
 const isAllowedOrigin = (origin) =>
   !origin || // non-browser clients (tests, curl) send no Origin
-  allowedOrigins.includes(origin) ||
-  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
+  allowedOrigins.includes(origin);
 
 class Socket {
   constructor(socket, onText) {

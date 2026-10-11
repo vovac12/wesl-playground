@@ -121,5 +121,8 @@
     "runtimes": {
       "node": ">=18.0.0"
     }
-  }
+  },
+  "privacy_policies": [
+    "https://github.com/vovac12/wesl-playground/blob/main/PRIVACY.md"
+  ]
 }

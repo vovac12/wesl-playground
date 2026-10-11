@@ -51,6 +51,12 @@ Ask for some shaders. Claude opens the viewer inline in the chat (`open_in_viewe
 creates and compiles projects through it. Click the viewer to focus it; it can also go
 fullscreen.
 
+### Example prompts
+
+- *"Make 3 portal shader variants and show them side by side."*
+- *"Create a lava lamp blob with vertex displacement and a noise texture, then open it."*
+- *"Make the rings example spin faster and glow orange, then take a screenshot."*
+
 ## Quick start: Claude Code + browser
 
 1. Install the Claude Code plugin (needs Node.js 18+):
@@ -81,7 +87,7 @@ are copied into the bridge's folder the next time it connects.
 | `WESL_PLAYGROUND_DIR`     | `~/.wesl-playground/projects`                 | Project folder                |
 | `WESL_PLAYGROUND_PORT`    | `7880`                                        | WebSocket port for tabs       |
 | `WESL_PLAYGROUND_URL`     | `https://vovac12.github.io/wesl-playground/`  | Viewer the bridge points to   |
-| `WESL_PLAYGROUND_ORIGINS` |                                               | Extra allowed page origins    |
+| `WESL_PLAYGROUND_ORIGINS` |                                               | Extra allowed page origins (e.g. a local build) |
 
 Use `?bridge=ws://host:port` on the page URL to match a custom port. Point
 `WESL_PLAYGROUND_DIR` at the native app's `BASE_FOLDER` to share projects with it.
@@ -179,6 +185,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 See [`plugin/server/guide.md`](plugin/server/guide.md) for the full manifest format, bindings,
 mesh shapes and a vertex shader template. The MCP server also sends this guide to agents.
 
+## Troubleshooting
+
+- **"No WESL Playground viewer is running"**: in Claude Desktop, ask Claude to open the viewer
+  (`open_in_viewer`); in Claude Code, open https://vovac12.github.io/wesl-playground/ and keep
+  the tab visible.
+- **Calls time out**: hidden tabs and viewers scrolled out of view are paused by the browser.
+  Keep the viewer visible, or use fullscreen in Claude Desktop.
+- **Port 7880 is in use**: another bridge is running (e.g. Claude Code and Claude Desktop at
+  once). The inline viewer still works; for tabs, set another port and add `?bridge=ws://127.0.0.1:PORT`.
+- **"This viewer is idle"**: an older viewer in the chat was replaced; click it to use it again.
+- Bridge logs: Claude Desktop → Settings → Developer, or `claude --debug` in Claude Code.
+
 ## MCP tools
 
 | Tool                               | Description                                              |
@@ -191,6 +209,11 @@ mesh shapes and a vertex shader template. The MCP server also sends this guide t
 | `open_in_viewer`                   | Show a project or group (inline viewer in Claude Desktop) |
 | `screenshot`, `viewer_state`       | See what the user sees, plus recent errors               |
 | `shader_guide`                     | The authoring guide                                      |
+
+## Privacy and security
+
+No data collection: see [PRIVACY.md](PRIVACY.md). Report vulnerabilities as described in
+[SECURITY.md](SECURITY.md).
 
 ## License
 

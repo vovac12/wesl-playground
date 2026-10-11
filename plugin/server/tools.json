@@ -1,16 +1,19 @@
 [
   {
     "name": "shader_guide",
+    "annotations": { "title": "Shader guide", "readOnlyHint": true, "openWorldHint": false },
     "description": "Returns the playground guide: manifest format, WESL rules, available bindings, fragment/vertex templates. Read it before writing shaders.",
     "inputSchema": { "type": "object", "properties": {} }
   },
   {
     "name": "list_projects",
+    "annotations": { "title": "List projects", "readOnlyHint": true, "openWorldHint": false },
     "description": "List all groups and projects.",
     "inputSchema": { "type": "object", "properties": {} }
   },
   {
     "name": "get_project",
+    "annotations": { "title": "Get project", "readOnlyHint": true, "openWorldHint": false },
     "description": "Get a project's manifest, file list and text file sources.",
     "inputSchema": {
       "type": "object",
@@ -23,6 +26,7 @@
   },
   {
     "name": "create_project",
+    "annotations": { "title": "Create project", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
     "description": "Create a project (manifest + shader/text files), then compile it off-screen and return errors. Works independently of what the viewer shows. Put variants in one group with ids like `portals/v1_swirl`.",
     "inputSchema": {
       "type": "object",
@@ -44,6 +48,7 @@
   },
   {
     "name": "update_project",
+    "annotations": { "title": "Update project", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
     "description": "Write/delete files and/or replace the manifest of an existing project, then compile it and return errors.",
     "inputSchema": {
       "type": "object",
@@ -63,7 +68,8 @@
   },
   {
     "name": "delete_project",
-    "description": "Delete a project.",
+    "annotations": { "title": "Delete project", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
+    "description": "Permanently delete a project and all its files.",
     "inputSchema": {
       "type": "object",
       "properties": { "id": { "type": "string" } },
@@ -72,6 +78,7 @@
   },
   {
     "name": "set_group",
+    "annotations": { "title": "Set group", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
     "description": "Create or update a group's display name, description and spacing (distance between projects when the whole group is shown).",
     "inputSchema": {
       "type": "object",
@@ -86,6 +93,7 @@
   },
   {
     "name": "add_texture",
+    "annotations": { "title": "Add texture", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
     "description": "Add a texture to a project: procedural PNG, base64 image data, or a copy of a local image file.",
     "inputSchema": {
       "type": "object",
@@ -111,6 +119,7 @@
   },
   {
     "name": "import_file",
+    "annotations": { "title": "Import file", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
     "description": "Copy a binary file (e.g. .glb mesh, image) into a project from a local path or base64.",
     "inputSchema": {
       "type": "object",
@@ -125,6 +134,7 @@
   },
   {
     "name": "compile_project",
+    "annotations": { "title": "Compile project", "readOnlyHint": true, "openWorldHint": false },
     "description": "Compile a project off-screen (does not change the viewer) and return shader/asset errors plus an optional preview image.",
     "inputSchema": {
       "type": "object",
@@ -137,6 +147,7 @@
   },
   {
     "name": "open_in_viewer",
+    "annotations": { "title": "Open in viewer", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
     "description": "Show a project, or a whole group side by side, in the user's viewer. Changes what the user sees; use when asked.",
     "inputSchema": {
       "type": "object",
@@ -145,11 +156,13 @@
   },
   {
     "name": "screenshot",
+    "annotations": { "title": "Screenshot viewer", "readOnlyHint": true, "openWorldHint": false },
     "description": "Capture the viewer as the user currently sees it.",
     "inputSchema": { "type": "object", "properties": {} }
   },
   {
     "name": "viewer_state",
+    "annotations": { "title": "Viewer state", "readOnlyHint": true, "openWorldHint": false },
     "description": "What the viewer is showing, its errors, and recent warnings/errors from the log.",
     "inputSchema": { "type": "object", "properties": {} }
   }
