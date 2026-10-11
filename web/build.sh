@@ -24,5 +24,5 @@ if command -v wasm-opt >/dev/null 2>&1; then
     echo "wasm-opt failed; keeping the unoptimized module"
 fi
 
-cp web/index.html dist/
+cp web/index.html web/viewer.js web/app.js dist/
 ls -la dist

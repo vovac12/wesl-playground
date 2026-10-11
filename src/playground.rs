@@ -454,6 +454,11 @@ fn handle_requests(
                     view.reload(target);
                 }
             }
+            AppRequest::Shutdown => {
+                commands.queue(|world: &mut World| {
+                    world.write_message(AppExit::Success);
+                });
+            }
         }
     }
 }

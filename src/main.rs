@@ -4,8 +4,9 @@
 //! - `BASE_FOLDER`: folder holding shader projects (default `./projects`)
 //! - `MCP_ADDR`: MCP listen address (default `127.0.0.1:7878`)
 //!
-//! In the browser, projects live in IndexedDB and MCP requests arrive from the Claude Code
-//! plugin's bridge (`?bridge=ws://127.0.0.1:7880` overrides its address).
+//! In the browser, the page's JavaScript (`web/viewer.js`) provides storage and the MCP
+//! transport: the Claude Code plugin's bridge over WebSocket, or the MCP Apps host when the
+//! viewer is embedded in Claude Desktop.
 
 #![allow(
     clippy::type_complexity,
@@ -27,6 +28,8 @@ mod scene;
 mod textures;
 mod ui;
 mod vfs;
+#[cfg(target_arch = "wasm32")]
+mod web_api;
 #[cfg(target_arch = "wasm32")]
 mod web_assets;
 
@@ -110,26 +113,11 @@ fn main() {
     app.add_plugins(web_assets::VfsAssetSourcePlugin);
     build_app(&mut app, store.clone(), rx, window, asset_plugin);
 
-    let status = mcp::spawn(store, tx);
+    // The page's JavaScript drives MCP and storage through `web_api`.
+    web_api::init(store, tx);
     app.insert_resource(ConnectionLabel(String::new()))
-        .insert_resource(status)
-        .add_systems(Update, update_bridge_label);
+        .add_systems(Update, web_api::update_connection_label);
     app.run();
-}
-
-#[cfg(target_arch = "wasm32")]
-fn update_bridge_label(status: Res<mcp::BridgeStatus>, mut label: ResMut<ConnectionLabel>) {
-    let text = if status.connected() {
-        format!("Claude Code bridge: connected ({})", status.url)
-    } else {
-        format!(
-            "Claude Code bridge: waiting for {} (install the wesl-playground plugin and run `claude`)",
-            status.url
-        )
-    };
-    if label.0 != text {
-        label.0 = text;
-    }
 }
 
 fn build_app(

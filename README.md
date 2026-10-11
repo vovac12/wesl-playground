@@ -1,8 +1,9 @@
 # Shader Playground
 
 A 3D playground for [WESL](https://wesl-lang.dev) shaders, built on Bevy 0.20, driven by
-[MCP](https://modelcontextprotocol.io). Ask Claude Code to write shaders, get compile errors back
-automatically, then fly around the results, in the browser or as a native app.
+[MCP](https://modelcontextprotocol.io). Ask Claude to write shaders, get compile errors back
+automatically, then fly around the results: inline in Claude Desktop, in a browser tab, or in a
+native app.
 
 > *"Generate 5 variants of portal shaders"* → five projects in a `Portals` group, compiled
 > and listed in the viewer. Open one, or show the whole group side by side.
@@ -11,8 +12,8 @@ automatically, then fly around the results, in the browser or as a native app.
 
 - **Fly-through viewer**: free camera, a project dropdown, and a group view that lays out
   every project in the group with floating labels.
-- **Runs in the browser or natively**: WebGPU/WebGL2 build on GitHub Pages with projects in
-  browser storage, or a native app working on a folder.
+- **Runs where you are**: inline in the Claude Desktop chat (MCP Apps), in a browser tab
+  (WebGPU/WebGL2 build on GitHub Pages), or as a native app.
 - **Claude Code plugin and built-in MCP server**: agents create, edit, compile and delete projects,
   whether or not those projects are open in the viewer.
 - **Real compile feedback**: projects compile in an off-screen sandbox, which reports WESL and
@@ -21,7 +22,27 @@ automatically, then fly around the results, in the browser or as a native app.
 - **Batteries included**: material bindings, noise helpers, procedural textures, primitive,
   glTF and custom meshes.
 
-## Quick start: browser
+## Quick start: Claude Desktop
+
+Needs Node.js 18+ and a clone of this repo. Add the bridge to
+`claude_desktop_config.json` (Settings → Developer → Edit Config) and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "wesl-playground": {
+      "command": "node",
+      "args": ["/path/to/wesl-playground/plugin/server/bridge.mjs"]
+    }
+  }
+}
+```
+
+Ask for some shaders. Claude opens the viewer inline in the chat (`open_in_viewer`), then
+creates and compiles projects through it. Click the viewer to focus it; it can also go
+fullscreen.
+
+## Quick start: Claude Code + browser
 
 1. Install the Claude Code plugin (needs Node.js 18+):
 
@@ -32,14 +53,29 @@ automatically, then fly around the results, in the browser or as a native app.
    On older Claude Code versions: `/plugin marketplace add vovac12/wesl-playground`, then
    `/plugin install wesl-playground@wesl-playground`.
 
-2. Open the viewer: **https://vovac12.github.io/wesl-playground/**
+2. Open the viewer: **https://vovac12.github.io/wesl-playground/** and keep the tab visible
+   (browsers pause hidden tabs).
 3. Run `claude` and ask for some shaders.
 
-The plugin runs a small local bridge (`plugin/server/bridge.mjs`) that Claude talks to over
-stdio. The page connects to it at `ws://127.0.0.1:7880`. Projects are stored in the browser
-(IndexedDB). Use `?bridge=ws://host:port` on the page URL and `WESL_PLAYGROUND_PORT` for the
-bridge to change the port. Chrome may ask to allow the page to access devices on your local
-network the first time.
+Chrome may ask to allow the page to access devices on your local network the first time.
+
+### How the bridge works
+
+Both setups run the same bridge (`plugin/server/bridge.mjs`), which Claude talks to over stdio.
+It stores projects in a folder and relays tool calls to one viewer at a time: the inline view
+in Claude Desktop, or a browser tab connected at `ws://127.0.0.1:7880`. The newest viewer takes
+over. Without a bridge, the page still works on its own and keeps projects in the browser; they
+are copied into the bridge's folder the next time it connects.
+
+| Env var                   | Default                                       | Purpose                       |
+| ------------------------- | --------------------------------------------- | ----------------------------- |
+| `WESL_PLAYGROUND_DIR`     | `~/.wesl-playground/projects`                 | Project folder                |
+| `WESL_PLAYGROUND_PORT`    | `7880`                                        | WebSocket port for tabs       |
+| `WESL_PLAYGROUND_URL`     | `https://vovac12.github.io/wesl-playground/`  | Viewer the bridge points to   |
+| `WESL_PLAYGROUND_ORIGINS` |                                               | Extra allowed page origins    |
+
+Use `?bridge=ws://host:port` on the page URL to match a custom port. Point
+`WESL_PLAYGROUND_DIR` at the native app's `BASE_FOLDER` to share projects with it.
 
 ## Quick start: native
 
@@ -136,7 +172,7 @@ mesh shapes and a vertex shader template. The MCP server also sends this guide t
 | `list_projects`, `get_project`     | Browse groups, manifests and sources                     |
 | `delete_project`, `set_group`      | Manage projects and group metadata                       |
 | `add_texture`, `import_file`       | Procedural/base64/local textures, `.glb` meshes          |
-| `open_in_viewer`                   | Show a project or a whole group                          |
+| `open_in_viewer`                   | Show a project or group (inline viewer in Claude Desktop) |
 | `screenshot`, `viewer_state`       | See what the user sees, plus recent errors               |
 | `shader_guide`                     | The authoring guide                                      |
 

@@ -2,18 +2,15 @@
 //!
 //! - Native: Streamable HTTP server (`http.rs`), e.g.
 //!   `claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp`
-//! - Browser: WebSocket client connecting to the local bridge from the Claude Code plugin
-//!   (`ws.rs`, `plugin/server/bridge.mjs`).
+//! - Browser: the page's JavaScript owns the transport (WebSocket to the plugin's bridge, or
+//!   MCP Apps host messages) and hands messages to [`McpServer::handle_json`] through
+//!   `web_api::mcp_handle`.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
-#[cfg(target_arch = "wasm32")]
-mod ws;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::spawn;
-#[cfg(target_arch = "wasm32")]
-pub use ws::{BridgeStatus, spawn};
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 

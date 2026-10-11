@@ -26,6 +26,12 @@ pub enum AppRequest {
     ProjectChanged {
         id: String,
     },
+    /// Stop the app (the browser page is handing the viewer over to another one).
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(dead_code, reason = "only sent by the web build")
+    )]
+    Shutdown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -11,61 +11,183 @@
         position: fixed; inset: 0; display: grid; place-items: center;
         color: #c9cbd3; font: 15px/1.5 system-ui, sans-serif; text-align: center; padding: 16px;
       }
-      #status a { color: #8fb3ff; }
+      #banner {
+        position: fixed; top: 10px; right: 10px; max-width: 420px; display: none;
+        padding: 8px 12px; border-radius: 6px; background: #3a3020; color: #f1d9a8;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      #banner button { margin-left: 8px; }
     </style>
   </head>
   <body>
     <canvas id="bevy" tabindex="0"></canvas>
     <div id="status">Loading WESL Playground…</div>
+    <div id="banner"></div>
     <script type="module">
-      const status = document.getElementById("status");
+      import {
+        applySnapshot, handleBridgeMessage, snapshotEntries, startViewer, toBase64,
+      } from "./viewer.js";
 
-      // Project files live in IndexedDB; the app keeps a copy in memory and writes through.
-      const DB_NAME = "wesl-playground", STORE = "files";
+      const status = document.getElementById("status");
+      const banner = document.getElementById("banner");
+      const showBanner = (html) => { banner.innerHTML = html; banner.style.display = html ? "block" : "none"; };
+      document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      const bridgeUrl = new URLSearchParams(location.search).get("bridge") || "ws://127.0.0.1:7880";
+
+      // ---- IndexedDB: offline storage, used when no Claude Code bridge is running.
+      const STORE = "files";
       const db = await new Promise((resolve) => {
-        const request = indexedDB.open(DB_NAME, 1);
+        const request = indexedDB.open("wesl-playground", 1);
         request.onupgradeneeded = () => request.result.createObjectStore(STORE);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => resolve(null);
       });
-      const initial = [];
-      if (db) {
+      const localFiles = async () => {
+        const files = [];
+        if (!db) return files;
         await new Promise((resolve) => {
           const cursor = db.transaction(STORE).objectStore(STORE).openCursor();
           cursor.onsuccess = () => {
             const c = cursor.result;
             if (!c) return resolve();
-            initial.push([c.key, new Uint8Array(c.value)]);
+            files.push([c.key, new Uint8Array(c.value)]);
             c.continue();
           };
           cursor.onerror = () => resolve();
         });
-      }
-      const write = (fn) => db && fn(db.transaction(STORE, "readwrite").objectStore(STORE));
-      window.shadertoyStorage = {
-        initialFiles: () => initial,
-        // `data` is a view into wasm memory; store a copy.
-        put: (path, data) => write((s) => s.put(data.slice().buffer, path)),
-        remove: (path) => write((s) => s.delete(path)),
+        return files;
       };
+      const writeLocal = (fn) => db && fn(db.transaction(STORE, "readwrite").objectStore(STORE));
 
-      document.addEventListener("contextmenu", (e) => e.preventDefault());
+      // ---- Bridge connection.
+      function connect(timeoutMs) {
+        return new Promise((resolve) => {
+          let ws;
+          try { ws = new WebSocket(bridgeUrl); } catch { return resolve(null); }
+          const timer = setTimeout(() => { ws.close(); resolve(null); }, timeoutMs);
+          ws.onopen = () => { clearTimeout(timer); resolve(ws); };
+          ws.onerror = () => { clearTimeout(timer); resolve(null); };
+        });
+      }
 
-      if (!navigator.gpu && !document.createElement("canvas").getContext("webgl2")) {
-        status.textContent = "This browser supports neither WebGPU nor WebGL2.";
-      } else {
-        try {
-          const { default: init } = await import("./shadertoy.js");
-          status.remove();
-          await init();
-        } catch (e) {
-          // winit uses an exception to hand control to the browser's event loop.
-          if (!String(e).includes("Using exceptions for control flow")) {
-            document.body.append(status);
-            status.textContent = `Failed to start: ${e}`;
-            throw e;
+      function rpc(ws, method, params) {
+        return new Promise((resolve, reject) => {
+          const id = `page-${Math.random().toString(36).slice(2)}`;
+          const onMessage = (event) => {
+            const message = JSON.parse(event.data);
+            if (message.id !== id) return;
+            ws.removeEventListener("message", onMessage);
+            message.error ? reject(new Error(message.error.message)) : resolve(message.result);
+          };
+          ws.addEventListener("message", onMessage);
+          ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+        });
+      }
+
+      async function runWithBridge(ws) {
+        // Projects created offline are uploaded; the bridge's folder wins on conflicts.
+        const { files } = await rpc(ws, "storage/snapshot", {});
+        for (const [path, bytes] of await localFiles()) {
+          if (!(path in files)) {
+            const data = toBase64(bytes);
+            ws.send(JSON.stringify({ jsonrpc: "2.0", method: "storage/put", params: { path, data } }));
+            files[path] = data;
           }
         }
+        const known = new Map(Object.entries(files));
+        let socket = ws;
+        const outbox = [];
+        const send = (message) => {
+          if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+          else outbox.push(message);
+        };
+        const storage = {
+          initialFiles: snapshotEntries(files),
+          put: (path, bytes) => {
+            const data = toBase64(bytes);
+            known.set(path, data);
+            send({ jsonrpc: "2.0", method: "storage/put", params: { path, data } });
+          },
+          remove: (path) => {
+            known.delete(path);
+            send({ jsonrpc: "2.0", method: "storage/remove", params: { path } });
+          },
+        };
+        status.remove();
+        const app = await startViewer(storage);
+        const connected = `Claude Code bridge: connected (${bridgeUrl}), projects stored by the bridge`;
+        app.setLabel(connected);
+
+        const attach = (ws) => {
+          socket = ws;
+          ws.onmessage = async (event) => {
+            const message = JSON.parse(event.data);
+            if ((await handleBridgeMessage(app, message, send)) === "superseded") {
+              socket = null;
+              ws.onclose = null;
+              ws.close();
+              app.setLabel("Another viewer took over the Claude Code bridge");
+              showBanner('Another viewer (tab or Claude Desktop) is now in use. <button id="take">Use this tab</button>');
+              document.getElementById("take").onclick = () => location.reload();
+            }
+          };
+          ws.onclose = () => {
+            socket = null;
+            app.setLabel(`Claude Code bridge: reconnecting to ${bridgeUrl}…`);
+            setTimeout(reconnect, 2000);
+          };
+        };
+        const reconnect = async () => {
+          const ws = await connect(3000);
+          if (!ws) return setTimeout(reconnect, 2000);
+          for (const message of outbox.splice(0)) ws.send(JSON.stringify(message));
+          applySnapshot(app, known, (await rpc(ws, "storage/snapshot", {})).files);
+          attach(ws);
+          app.setLabel(connected);
+        };
+        attach(ws);
+      }
+
+      async function runOffline() {
+        status.remove();
+        const app = await startViewer({
+          initialFiles: await localFiles(),
+          put: (path, bytes) => writeLocal((s) => s.put(bytes.buffer, path)),
+          remove: (path) => writeLocal((s) => s.delete(path)),
+        });
+        app.setLabel("Offline: projects are stored in this browser. Run `claude` with the wesl-playground plugin to connect.");
+        // Switch to the bridge as soon as one shows up.
+        const probe = async () => {
+          const ws = await connect(1500);
+          const usable = ws && (await supportsStorage(ws));
+          ws?.close();
+          if (!usable) return setTimeout(probe, 5000);
+          showBanner("Claude Code bridge found, reloading…");
+          setTimeout(() => location.reload(), 500);
+        };
+        setTimeout(probe, 3000);
+      }
+
+      // An outdated bridge does not speak the viewer protocol; run offline instead of hanging.
+      async function supportsStorage(ws) {
+        const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 3000));
+        const ok = rpc(ws, "bridge/info", {}).then((info) => info?.protocol >= 1, () => false);
+        return Promise.race([ok, timeout]);
+      }
+
+      try {
+        let ws = await connect(1500);
+        if (ws && !(await supportsStorage(ws))) {
+          ws.close();
+          ws = null;
+          showBanner("The Claude Code bridge is outdated; update the wesl-playground plugin. Running offline.");
+        }
+        await (ws ? runWithBridge(ws) : runOffline());
+      } catch (e) {
+        document.body.append(status);
+        status.textContent = `Failed to start: ${e}`;
+        throw e;
       }
     </script>
   </body>

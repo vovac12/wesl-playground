@@ -1,7 +1,8 @@
 //! Project file storage.
 //!
 //! Paths are relative, `/`-separated strings. Natively they live under `BASE_FOLDER`; in the
-//! browser they live in memory and are mirrored to IndexedDB by the page (see `web/index.html`).
+//! browser they live in memory and the page persists every write, either to IndexedDB or to the
+//! Claude Code bridge's project folder (see `web/viewer.js`).
 
 use std::io;
 
@@ -104,7 +105,7 @@ mod web {
         fn js_put(path: &str, data: &[u8]);
         #[wasm_bindgen(js_namespace = shadertoyStorage, js_name = remove)]
         fn js_remove(path: &str);
-        /// Files loaded from IndexedDB before the app started: `[[path, Uint8Array], ...]`.
+        /// Files the page loaded before the app started: `[[path, Uint8Array], ...]`.
         #[wasm_bindgen(js_namespace = shadertoyStorage, js_name = initialFiles)]
         fn js_initial_files() -> js_sys::Array;
     }
@@ -120,7 +121,7 @@ mod web {
     pub struct Vfs;
 
     impl Vfs {
-        /// Loads the files the page read from IndexedDB.
+        /// Loads the files the page provided.
         pub fn new() -> Self {
             let mut files = FILES.lock().unwrap();
             for entry in js_initial_files().iter() {
@@ -135,7 +136,22 @@ mod web {
         }
 
         pub fn describe(&self) -> String {
-            "browser storage (IndexedDB)".into()
+            "the viewer page's storage (the bridge's project folder when connected, otherwise IndexedDB)"
+                .into()
+        }
+
+        /// Applies a change made elsewhere (e.g. by another viewer) without persisting it again.
+        pub fn apply_external(rel: &str, bytes: Option<Vec<u8>>) {
+            let mut files = FILES.lock().unwrap();
+            match bytes {
+                Some(bytes) => {
+                    let revision = REVISION.fetch_add(1, Ordering::Relaxed);
+                    files.insert(rel.to_string(), File { bytes, revision });
+                }
+                None => {
+                    files.remove(rel);
+                }
+            }
         }
 
         /// Used by the asset reader, which runs outside of any `Vfs` instance.

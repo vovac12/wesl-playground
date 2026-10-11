@@ -5021,7 +5021,6 @@ dependencies = [
  "tiny_http",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
