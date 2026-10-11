@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "wesl-playground",
   "display_name": "WESL Playground",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Write, compile and preview WESL shaders in a 3D viewer shown inline in the chat.",
   "long_description": "Claude writes WESL shaders, gets compile errors back, and shows the results in a fly-through 3D viewer (Bevy, WebGPU/WebGL2) inline in the chat. Projects are plain folders on disk; groups show several variants side by side. The viewer also runs in a browser tab at https://vovac12.github.io/wesl-playground/.",
   "author": {
