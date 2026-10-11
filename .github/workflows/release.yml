@@ -1,0 +1,38 @@
+name: Release
+
+# Push a tag like v0.1.0 to publish the Claude Desktop extension (.mcpb) as a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check versions match the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          plugin=$(node -p 'require("./plugin/.claude-plugin/plugin.json").version')
+          manifest=$(node -p 'require("./plugin/manifest.json").version')
+          echo "tag=$tag Cargo.toml=$cargo plugin.json=$plugin manifest.json=$manifest"
+          [ "$tag" = "$cargo" ] && [ "$tag" = "$plugin" ] && [ "$tag" = "$manifest" ]
+
+      - name: Pack the Claude Desktop extension
+        run: |
+          npx -y @anthropic-ai/mcpb validate plugin/manifest.json
+          npx -y @anthropic-ai/mcpb pack plugin wesl-playground.mcpb
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" wesl-playground.mcpb --title "$GITHUB_REF_NAME" --generate-notes

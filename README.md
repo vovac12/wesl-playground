@@ -24,8 +24,15 @@ native app.
 
 ## Quick start: Claude Desktop
 
-Needs Node.js 18+ and a clone of this repo. Add the bridge to
-`claude_desktop_config.json` (Settings → Developer → Edit Config) and restart Claude Desktop:
+Download **[wesl-playground.mcpb](https://github.com/vovac12/wesl-playground/releases/latest/download/wesl-playground.mcpb)**
+and open it (or drag it into Settings → Extensions). Claude Desktop runs it with its built-in
+Node.js; the extension settings let you pick the projects folder.
+
+<details>
+<summary>Manual setup from a clone (for development)</summary>
+
+Needs Node.js 18+. Add the bridge to `claude_desktop_config.json` (Settings → Developer →
+Edit Config) and restart Claude Desktop:
 
 ```json
 {
@@ -37,6 +44,8 @@ Needs Node.js 18+ and a clone of this repo. Add the bridge to
   }
 }
 ```
+
+</details>
 
 Ask for some shaders. Claude opens the viewer inline in the chat (`open_in_viewer`), then
 creates and compiles projects through it. Click the viewer to focus it; it can also go
@@ -107,6 +116,13 @@ cargo install wasm-bindgen-cli --version 0.2.129   # must match Cargo.lock
 ```
 
 Pushing to `main` deploys `dist/` to GitHub Pages (`.github/workflows/pages.yml`).
+
+### Releasing
+
+Bump the version in `Cargo.toml`, `plugin/.claude-plugin/plugin.json` and `plugin/manifest.json`,
+then push a `vX.Y.Z` tag. `.github/workflows/release.yml` packs `plugin/` into
+`wesl-playground.mcpb` and attaches it to a GitHub release. To pack locally:
+`npx @anthropic-ai/mcpb pack plugin`.
 
 ## Controls
 

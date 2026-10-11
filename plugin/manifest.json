@@ -1,0 +1,125 @@
+{
+  "manifest_version": "0.3",
+  "name": "wesl-playground",
+  "display_name": "WESL Playground",
+  "version": "0.1.0",
+  "description": "Write, compile and preview WESL shaders in a 3D viewer shown inline in the chat.",
+  "long_description": "Claude writes WESL shaders, gets compile errors back, and shows the results in a fly-through 3D viewer (Bevy, WebGPU/WebGL2) inline in the chat. Projects are plain folders on disk; groups show several variants side by side. The viewer also runs in a browser tab at https://vovac12.github.io/wesl-playground/.",
+  "author": {
+    "name": "Vladimir Stepanenko",
+    "url": "https://github.com/vovac12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vovac12/wesl-playground"
+  },
+  "homepage": "https://github.com/vovac12/wesl-playground",
+  "support": "https://github.com/vovac12/wesl-playground/issues",
+  "icon": "icon.png",
+  "license": "MIT",
+  "keywords": [
+    "shaders",
+    "wesl",
+    "wgsl",
+    "bevy",
+    "graphics",
+    "3d"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "server/bridge.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/bridge.mjs"
+      ],
+      "env": {
+        "WESL_PLAYGROUND_DIR": "${user_config.projects_dir}",
+        "WESL_PLAYGROUND_PORT": "${user_config.port}"
+      }
+    }
+  },
+  "user_config": {
+    "projects_dir": {
+      "type": "directory",
+      "title": "Projects folder",
+      "description": "Where shader projects are stored.",
+      "required": false,
+      "default": "${HOME}/.wesl-playground/projects"
+    },
+    "port": {
+      "type": "number",
+      "title": "Browser tab port",
+      "description": "Local WebSocket port for the optional browser-tab viewer.",
+      "required": false,
+      "default": 7880,
+      "min": 1024,
+      "max": 65535
+    }
+  },
+  "tools": [
+    {
+      "name": "shader_guide",
+      "description": "Returns the playground guide: manifest format, WESL rules, available bindings, fragment/vertex templates."
+    },
+    {
+      "name": "list_projects",
+      "description": "List all groups and projects."
+    },
+    {
+      "name": "get_project",
+      "description": "Get a project's manifest, file list and text file sources."
+    },
+    {
+      "name": "create_project",
+      "description": "Create a project (manifest + shader/text files), then compile it off-screen and return errors."
+    },
+    {
+      "name": "update_project",
+      "description": "Write/delete files and/or replace the manifest of an existing project, then compile it and return errors."
+    },
+    {
+      "name": "delete_project",
+      "description": "Delete a project."
+    },
+    {
+      "name": "set_group",
+      "description": "Create or update a group's display name, description and spacing (distance between projects when the whole group is shown)."
+    },
+    {
+      "name": "add_texture",
+      "description": "Add a texture to a project: procedural PNG, base64 image data, or a copy of a local image file."
+    },
+    {
+      "name": "import_file",
+      "description": "Copy a binary file (e.g."
+    },
+    {
+      "name": "compile_project",
+      "description": "Compile a project off-screen (does not change the viewer) and return shader/asset errors plus an optional preview image."
+    },
+    {
+      "name": "open_in_viewer",
+      "description": "Show a project, or a whole group side by side, in the user's viewer."
+    },
+    {
+      "name": "screenshot",
+      "description": "Capture the viewer as the user currently sees it."
+    },
+    {
+      "name": "viewer_state",
+      "description": "What the viewer is showing, its errors, and recent warnings/errors from the log."
+    }
+  ],
+  "tools_generated": true,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
