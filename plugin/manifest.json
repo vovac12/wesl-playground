@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "wesl-playground",
   "display_name": "WESL Playground",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Write, compile and preview WESL shaders in a 3D viewer shown inline in the chat.",
   "long_description": "Claude writes WESL shaders, gets compile errors back, and shows the results in a fly-through 3D viewer (Bevy, WebGPU/WebGL2) inline in the chat. Projects are plain folders on disk; groups show several variants side by side. The viewer also runs in a browser tab at https://vovac12.github.io/wesl-playground/.",
   "author": {
@@ -80,11 +80,15 @@
     },
     {
       "name": "delete_project",
-      "description": "Delete a project."
+      "description": "Permanently delete a project and all its files."
     },
     {
       "name": "set_group",
       "description": "Create or update a group's display name, description and spacing (distance between projects when the whole group is shown)."
+    },
+    {
+      "name": "update_shared_files",
+      "description": "Write or delete WESL modules shared by all projects of a group (stored in the group's shared/ folder), then recompile every project in the group and return per-project errors."
     },
     {
       "name": "add_texture",

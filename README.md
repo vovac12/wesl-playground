@@ -145,6 +145,7 @@ then push a `vX.Y.Z` tag. `.github/workflows/release.yml` packs `plugin/` into
 ```text
 projects/
   portals/                 group (optional group.json)
+    shared/                modules shared by the group, e.g. sdf.wesl
     swirl/
       project.json
       portal.wesl
@@ -152,7 +153,9 @@ projects/
 ```
 
 A project is a folder containing `project.json`. Folder names are `snake_case`, so files
-can import each other with `import super::common::foo;`.
+can import each other with `import super::common::foo;`. Projects in a group import the
+group's shared modules with `import super::super::shared::sdf::sd_torus;`, and editing a shared
+module recompiles every project in the group.
 
 ```json
 {
@@ -183,7 +186,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 ```
 
 See [`plugin/server/guide.md`](plugin/server/guide.md) for the full manifest format, bindings,
-mesh shapes and a vertex shader template. The MCP server also sends this guide to agents.
+mesh shapes and a vertex shader template. Agents read it through the `shader_guide` tool.
 
 ## Troubleshooting
 
@@ -205,6 +208,7 @@ mesh shapes and a vertex shader template. The MCP server also sends this guide t
 | `compile_project`                  | Compile off-screen, return errors and a preview image    |
 | `list_projects`, `get_project`     | Browse groups, manifests and sources                     |
 | `delete_project`, `set_group`      | Manage projects and group metadata                       |
+| `update_shared_files`              | WESL modules shared by a group, recompiles its projects  |
 | `add_texture`, `import_file`       | Procedural/base64/local textures, `.glb` meshes          |
 | `open_in_viewer`                   | Show a project or group (inline viewer in Claude Desktop) |
 | `screenshot`, `viewer_state`       | See what the user sees, plus recent errors               |

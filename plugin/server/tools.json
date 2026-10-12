@@ -92,6 +92,24 @@
     }
   },
   {
+    "name": "update_shared_files",
+    "annotations": { "title": "Update shared modules", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
+    "description": "Write or delete WESL modules shared by all projects of a group (stored in the group's shared/ folder), then recompile every project in the group and return per-project errors. Projects import them with `import super::super::shared::<module>::{...};`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "group": { "type": "string", "description": "Group id (lowercase snake_case); created if missing" },
+        "files": {
+          "type": "object",
+          "description": "Map of path relative to shared/ -> WESL source; null deletes the file (e.g. {\"noise.wesl\": \"...\"}).",
+          "additionalProperties": { "type": ["string", "null"] }
+        },
+        "compile": { "type": "boolean", "default": true, "description": "Recompile the group's projects" }
+      },
+      "required": ["group", "files"]
+    }
+  },
+  {
     "name": "add_texture",
     "annotations": { "title": "Add texture", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
     "description": "Add a texture to a project: procedural PNG, base64 image data, or a copy of a local image file.",

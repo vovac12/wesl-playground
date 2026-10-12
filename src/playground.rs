@@ -133,7 +133,10 @@ impl CurrentView {
     }
 
     pub fn contains(&self, id: &str) -> bool {
-        self.projects.iter().any(|p| p.id == id)
+        // `id` may be a group whose shared modules changed.
+        self.projects
+            .iter()
+            .any(|p| p.id == id || p.id.starts_with(&format!("{id}/")))
             || matches!(&self.target, Some(ViewTarget::Group(g)) if id.starts_with(&format!("{g}/")) || id == g)
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "wesl-playground",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Write, compile and preview WESL shaders in a 3D browser playground (Bevy, WebGPU/WebGL2).",
   "author": { "name": "Vladimir Stepanenko" },
   "homepage": "https://vovac12.github.io/wesl-playground/",

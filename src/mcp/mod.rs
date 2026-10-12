@@ -21,7 +21,8 @@ use serde_json::{Value, json};
 use crate::{
     bridge::{AppRequest, CompileReport, ViewTarget},
     project::{
-        GroupManifest, Manifest, Store, validate_project_id, validate_rel_path, validate_slug,
+        GroupManifest, Manifest, SHARED_DIR, Store, validate_project_id, validate_rel_path,
+        validate_slug,
     },
     textures::{Procedural, generate_png},
 };
@@ -93,7 +94,7 @@ impl McpServer {
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": "shadertoy", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": GUIDE,
+                    "instructions": "WESL shader playground: each project is a folder with a project.json and .wesl files. Call `shader_guide` once before writing shaders.",
                 }))
             }
             "ping" => Ok(json!({})),
@@ -131,6 +132,7 @@ impl McpServer {
                 Ok(vec![text(&format!("deleted `{id}`"))])
             }
             "set_group" => self.set_group(args),
+            "update_shared_files" => self.update_shared_files(args).await,
             "add_texture" => self.add_texture(args),
             "import_file" => self.import_file(args),
             "compile_project" => {
@@ -206,6 +208,7 @@ impl McpServer {
                 "id": g.id,
                 "name": g.manifest.name,
                 "description": g.manifest.description,
+                "shared": self.store.list_shared_files(&g.id),
                 "projects": g.projects.iter().map(project).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "ungrouped": catalog.ungrouped.iter().map(project).collect::<Vec<_>>(),
@@ -229,12 +232,20 @@ impl McpServer {
                 }
             }
         }
-        let value = json!({
+        let mut value = json!({
             "id": id,
             "manifest": match &manifest { Ok(m) => json!(m), Err(e) => json!({ "error": e }) },
             "files": files,
             "sources": sources,
         });
+        if let Some((group, _)) = id.split_once('/') {
+            let shared = self.store.list_shared_files(group);
+            if !shared.is_empty() {
+                value["group_shared_files"] = json!(shared);
+                value["group_shared_import"] =
+                    json!(format!("import super::super::{SHARED_DIR}::<module>::{{...}};"));
+            }
+        }
         Ok(vec![text(&serde_json::to_string_pretty(&value).unwrap())])
     }
 
@@ -320,6 +331,56 @@ impl McpServer {
         self.store.write_group(group, &manifest)?;
         self.notify(group);
         Ok(vec![text(&format!("group `{group}` saved"))])
+    }
+
+    /// Writes/deletes a group's shared modules, then recompiles every project of the group.
+    async fn update_shared_files(&self, args: &Value) -> Result<Vec<Value>, String> {
+        let group = str_arg(args, "group")?;
+        self.store.check_group(group)?;
+        let files = files_arg(args)?;
+        if files.is_empty() {
+            return Err("`files` is empty".into());
+        }
+        let mut changed = Vec::new();
+        for (path, content) in files {
+            match content {
+                Some(content) => {
+                    changed.push(self.store.write_shared_file(group, &path, content.as_bytes())?)
+                }
+                None => {
+                    self.store.delete_shared_file(group, &path)?;
+                    changed.push(format!("{path} (deleted)"));
+                }
+            }
+        }
+        self.notify(group);
+        let saved = format!("saved {SHARED_DIR}/ in `{group}`: {}", changed.join(", "));
+        if !bool_arg(args, "compile", true) {
+            return Ok(vec![text(&saved)]);
+        }
+        let projects: Vec<String> = self
+            .store
+            .scan()
+            .group(group)
+            .map(|g| g.projects.iter().map(|p| p.id.clone()).collect())
+            .unwrap_or_default();
+        let mut results = Vec::new();
+        for id in projects {
+            let (tx, rx) = bounded(1);
+            self.send(AppRequest::Compile {
+                id: id.clone(),
+                preview: false,
+                reply: tx,
+            })?;
+            let report: CompileReport = wait(rx, COMPILE_WAIT).await?;
+            results.push(if report.ok {
+                json!({ "project": id, "ok": true })
+            } else {
+                json!({ "project": id, "ok": false, "timed_out": report.timed_out, "errors": report.errors })
+            });
+        }
+        let value = json!({ "saved": saved, "compiled": results });
+        Ok(vec![text(&serde_json::to_string_pretty(&value).unwrap())])
     }
 
     fn add_texture(&self, args: &Value) -> Result<Vec<Value>, String> {

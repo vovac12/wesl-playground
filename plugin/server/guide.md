@@ -58,6 +58,13 @@ visible from both sides.
 - `import a::b::{c, d};` statements come first and end with `;`.
 - Relative imports to files in the same project folder: `import super::common::{my_fn};`
   (file `common.wesl` next to the importing file).
+- Group-shared modules: code used by several variants of a group (SDFs, palettes, noise)
+  goes in the group's `shared/` folder via `update_shared_files`, e.g. `shared/sdf.wesl`.
+  A project's top-level shader imports it with `import super::super::shared::sdf::{sd_torus};`
+  (one more `super::` per subfolder). Shared modules can import each other with
+  `super::other::{...}` and use the `shadertoy::` and `bevy_pbr::` modules as usual.
+  `update_shared_files` recompiles every project of the group, so you see who broke.
+  `shared` is not a valid project name inside a group.
 - Conditional compilation: `@if(FLAG)` / `@else` on declarations and statements.
 - Everything else is plain WGSL. Use explicit float literals (`1.0`, not `1`) when mixing with f32.
 - Fragment entry point must be `fn fragment`, vertex entry point `fn vertex`.

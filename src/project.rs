@@ -9,6 +9,8 @@
 //!     main.wesl
 //!   portals/               <- group (no project.json, optional group.json)
 //!     group.json
+//!     shared/              <- WESL modules shared by the group's projects
+//!       noise.wesl
 //!     portal_simple/
 //!       project.json
 //!       portal.wesl
@@ -17,6 +19,7 @@
 //!
 //! Project ids are `slug` or `group/slug`. Slugs are restricted to `[a-z][a-z0-9_]*` so that
 //! every folder is a valid WESL module path component (imports like `super::common` work).
+//! A project's top-level shader imports group modules with `super::super::shared::noise`.
 
 use std::{
     collections::BTreeMap,
@@ -29,6 +32,8 @@ use crate::vfs::Vfs;
 
 pub const MANIFEST_FILE: &str = "project.json";
 pub const GROUP_FILE: &str = "group.json";
+/// Folder of a group holding modules shared by its projects; not a valid project name.
+pub const SHARED_DIR: &str = "shared";
 
 /// Contents of `project.json`.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -324,6 +329,22 @@ pub fn validate_rel_path(path: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+/// Validates a path inside a group's `shared/` folder; only shader modules live there.
+pub fn validate_shared_path(path: &str) -> Result<String, String> {
+    let rel = validate_rel_path(path)?;
+    if rel.ends_with(".wesl") || rel.ends_with(".wgsl") {
+        Ok(rel)
+    } else {
+        Err(format!(
+            "`{path}`: shared files are WESL modules (`.wesl` or `.wgsl`)"
+        ))
+    }
+}
+
+fn shared_path(group: &str, rel: &str) -> String {
+    format!("{group}/{SHARED_DIR}/{rel}")
+}
+
 pub struct Store {
     pub vfs: Vfs,
 }
@@ -418,7 +439,12 @@ impl Store {
     /// Returns an error if `id` is a group folder or would be nested inside a project.
     pub fn check_project_location(&self, id: &str) -> Result<(), String> {
         validate_project_id(id)?;
-        if let Some((group, _)) = id.split_once('/') {
+        if let Some((group, name)) = id.split_once('/') {
+            if name == SHARED_DIR {
+                return Err(format!(
+                    "`{SHARED_DIR}` is reserved for the group's shared modules; pick another project name"
+                ));
+            }
             if self.project_exists(group) {
                 return Err(format!("`{group}` is a project, not a group"));
             }
@@ -481,6 +507,43 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
+    /// Checks that `group` can hold shared files: a valid name that is not a project.
+    pub fn check_group(&self, group: &str) -> Result<(), String> {
+        validate_slug(group)?;
+        if self.project_exists(group) {
+            return Err(format!(
+                "`{group}` is an ungrouped project; shared modules belong to groups"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Writes a shader module shared by the projects of `group` (path relative to `shared/`).
+    pub fn write_shared_file(&self, group: &str, rel: &str, bytes: &[u8]) -> Result<String, String> {
+        self.check_group(group)?;
+        let rel = validate_shared_path(rel)?;
+        self.vfs
+            .write(&shared_path(group, &rel), bytes)
+            .map_err(|e| format!("{rel}: {e}"))?;
+        Ok(rel)
+    }
+
+    pub fn delete_shared_file(&self, group: &str, rel: &str) -> Result<(), String> {
+        self.check_group(group)?;
+        let rel = validate_shared_path(rel)?;
+        self.vfs
+            .remove_file(&shared_path(group, &rel))
+            .map_err(|e| format!("{rel}: {e}"))
+    }
+
+    /// Shared module files of `group`, relative to its `shared/` folder.
+    pub fn list_shared_files(&self, group: &str) -> Vec<String> {
+        if self.project_exists(group) {
+            return Vec::new();
+        }
+        self.list_files(&join(group, SHARED_DIR))
+    }
+
     /// Lists files below `id` (relative paths with `/`), excluding the project manifest.
     pub fn list_files(&self, id: &str) -> Vec<String> {
         fn walk(vfs: &Vfs, dir: &str, prefix: &str, out: &mut Vec<String>) {
@@ -523,13 +586,20 @@ impl Store {
         missing
     }
 
-    /// All `.wesl`/`.wgsl` files of a project with their sources (asset path -> source).
+    /// All `.wesl`/`.wgsl` files a project can use, including its group's shared modules
+    /// (asset path -> source).
     pub fn shader_sources(&self, id: &str) -> BTreeMap<String, String> {
+        let shared = id
+            .split_once('/')
+            .map(|(group, _)| join(group, SHARED_DIR))
+            .into_iter()
+            .flat_map(|dir| self.list_files(&dir).into_iter().map(move |f| join(&dir, &f)));
         self.list_files(id)
             .into_iter()
+            .map(|f| join(id, &f))
+            .chain(shared)
             .filter(|f| f.ends_with(".wesl") || f.ends_with(".wgsl"))
-            .filter_map(|f| {
-                let path = join(id, &f);
+            .filter_map(|path| {
                 let src = String::from_utf8(self.vfs.read(&path).ok()?).ok()?;
                 Some((path, src))
             })
