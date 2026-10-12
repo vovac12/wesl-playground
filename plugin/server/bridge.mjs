@@ -14,6 +14,8 @@
 //   WESL_PLAYGROUND_URL      viewer URL (default https://vovac12.github.io/wesl-playground/)
 //   WESL_PLAYGROUND_ORIGINS  extra allowed page origins, comma separated
 //                            (e.g. http://localhost:8080 for a local build of the viewer)
+//   WESL_PLAYGROUND_ALLOW_NO_ORIGIN  set to 1 to accept WebSocket clients that send no Origin
+//                            (scripts, tests); off by default
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -436,14 +438,14 @@ process.stdin.on("end", () => process.exit(0));
 
 let listenError = null;
 
-// Only the viewer may connect: any other site could otherwise pose as the viewer.
+// Only the viewer may connect: any other site could otherwise pose as the viewer. Browsers always
+// send Origin; a request without one comes from a local program, which is refused unless opted in.
 const allowedOrigins = [
   VIEWER_ORIGIN,
   ...(process.env.WESL_PLAYGROUND_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
 ];
-const isAllowedOrigin = (origin) =>
-  !origin || // non-browser clients (tests, curl) send no Origin
-  allowedOrigins.includes(origin);
+const ALLOW_NO_ORIGIN = process.env.WESL_PLAYGROUND_ALLOW_NO_ORIGIN === "1";
+const isAllowedOrigin = (origin) => (origin ? allowedOrigins.includes(origin) : ALLOW_NO_ORIGIN);
 
 class Socket {
   constructor(socket, onText) {
@@ -525,7 +527,7 @@ server.on("upgrade", (req, rawSocket) => {
   const origin = req.headers.origin;
   const key = req.headers["sec-websocket-key"];
   if (!key || !isAllowedOrigin(origin)) {
-    log(`rejected connection from origin ${origin}`);
+    log(`rejected connection from origin ${origin ?? "(none)"}`);
     rawSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
     return;
   }

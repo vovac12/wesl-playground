@@ -1,7 +1,7 @@
 //! MCP server core: JSON-RPC handling and tools, independent of the transport.
 //!
 //! - Native: Streamable HTTP server (`http.rs`), e.g.
-//!   `claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp`
+//!   `claude mcp add --transport http wesl-playground-native http://127.0.0.1:7878/mcp`
 //! - Browser: the page's JavaScript owns the transport (WebSocket to the plugin's bridge, or
 //!   MCP Apps host messages) and hands messages to [`McpServer::handle_json`] through
 //!   `web_api::mcp_handle`.

@@ -73,6 +73,8 @@ fullscreen.
 3. Run `claude` and ask for some shaders.
 
 Chrome may ask to allow the page to access devices on your local network the first time.
+See [`plugin/README.md`](plugin/README.md) for the plugin's tools, configuration, what it runs
+and connects to, and troubleshooting.
 
 ### How the bridge works
 
@@ -88,6 +90,7 @@ are copied into the bridge's folder the next time it connects.
 | `WESL_PLAYGROUND_PORT`    | `7880`                                        | WebSocket port for tabs       |
 | `WESL_PLAYGROUND_URL`     | `https://vovac12.github.io/wesl-playground/`  | Viewer the bridge points to   |
 | `WESL_PLAYGROUND_ORIGINS` |                                               | Extra allowed page origins (e.g. a local build) |
+| `WESL_PLAYGROUND_ALLOW_NO_ORIGIN` |                                       | `1` accepts WebSocket clients without an Origin (scripts, tests) |
 
 Use `?bridge=ws://host:port` on the page URL to match a custom port. Point
 `WESL_PLAYGROUND_DIR` at the native app's `BASE_FOLDER` to share projects with it.
@@ -103,7 +106,7 @@ cargo run --release
 Then run `claude` in this repo (it ships a `.mcp.json`) or register the server once:
 
 ```sh
-claude mcp add --transport http shadertoy http://127.0.0.1:7878/mcp
+claude mcp add --transport http wesl-playground-native http://127.0.0.1:7878/mcp
 ```
 
 | Env var       | Default          | Purpose                     |

@@ -82,7 +82,7 @@ fn main() {
     let mut app = App::new();
     build_app(&mut app, store.clone(), rx, window, asset_plugin);
     app.insert_resource(ConnectionLabel(format!("MCP: {mcp_url}")));
-    info!("connect Claude Code with: claude mcp add --transport http shadertoy {mcp_url}");
+    info!("connect Claude Code with: claude mcp add --transport http wesl-playground-native {mcp_url}");
 
     mcp::spawn(addr, store, tx);
     app.run();
@@ -176,7 +176,7 @@ fn write_mcp_config(base: &std::path::Path, url: &str) {
         return;
     }
     let config = serde_json::json!({
-        "mcpServers": { "shadertoy": { "type": "http", "url": url } }
+        "mcpServers": { "wesl-playground-native": { "type": "http", "url": url } }
     });
     let _ = std::fs::write(path, serde_json::to_string_pretty(&config).unwrap());
 }
